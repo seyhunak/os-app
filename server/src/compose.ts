@@ -183,6 +183,7 @@ export function describeItem(item: Record<string, unknown>, timeZone: string): s
   if (text('repo')) return `${text('repo')}: ${text('title')}`;
   if (text('id') && text('title')) return `${text('id')}: ${text('title')}`;
   if (text('channel')) return `#${text('channel')}: ${text('text')}`;
+  if (text('task') && text('due')) return `${text('task')}, due ${text('due')}`;
   return text('title') || text('task') || text('text') || 'Untitled item';
 }
 

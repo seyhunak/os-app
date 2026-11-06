@@ -131,6 +131,30 @@ export const TOOLKITS: Toolkit[] = [
     },
   },
   {
+    slug: 'googletasks',
+    name: 'Google Tasks',
+    description: 'Open tasks and due dates across your task lists',
+    async collect(gateway, account) {
+      const base = 'https://tasks.googleapis.com/tasks/v1';
+      const lists = asList(asDict(await gateway.proxy({ accountId: account!.id, endpoint: `${base}/users/@me/lists`, method: 'GET', query: { maxResults: 10 } })).items).map(asDict);
+      const facts: unknown[] = [];
+      for (const list of lists) {
+        const data = asDict(await gateway.proxy({
+          accountId: account!.id,
+          endpoint: `${base}/lists/${encodeURIComponent(String(list.id))}/tasks`,
+          method: 'GET',
+          query: { showCompleted: 'false', showHidden: 'false', maxResults: 50 },
+        }));
+        for (const raw of asList(data.items)) {
+          const t = asDict(raw);
+          if (t.status === 'completed' || !clip(t.title)) continue;
+          facts.push({ task: clip(t.title, 160), due: typeof t.due === 'string' ? t.due.slice(0, 10) : null, list: clip(list.title, 60), notes: clip(t.notes) });
+        }
+      }
+      return facts;
+    },
+  },
+  {
     slug: 'linear',
     name: 'Linear',
     description: 'Issues and their current state',

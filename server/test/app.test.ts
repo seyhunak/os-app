@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.ts';
 import { toolkitBySlug } from '../src/collectors.ts';
-import { RateLimitError, type ComposioGateway } from '../src/composio.ts';
+import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/composio.ts';
 import { createOpenRouterComposer, describeComposeError, describeItem, extractNote, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
 import { Store } from '../src/db.ts';
 import { redact } from '../src/redact.ts';
@@ -522,6 +522,30 @@ describe('prompt', () => {
     const prompt = renderUserPrompt({ kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [{ toolkit: 'googlecalendar', name: 'Google Calendar', status: 'live', items: 1 }], facts: { googlecalendar: [{ title: 'Call' }] } });
     expect(prompt).toContain('"Google Calendar"');
     expect(prompt).not.toContain('googlecalendar');
+  });
+});
+
+describe('Google Tasks collector', () => {
+  const account = { id: 'ca_1', toolkit: 'googletasks', label: 'googletasks' };
+  const tasks = toolkitBySlug('googletasks')!;
+
+  it('reads open tasks from every list', async () => {
+    const seen: ProxyRequest[] = [];
+    const proxy = vi.fn<ComposioGateway['proxy']>(async (request) => {
+      seen.push(request);
+      if (request.endpoint.endsWith('/users/@me/lists')) return { items: [{ id: 'a/b', title: 'Work' }, { id: 'c', title: 'Home' }] };
+      if (request.endpoint.includes('a%2Fb')) return { items: [{ title: 'Send invoice', due: '2026-11-09T00:00:00.000Z', notes: 'For Pat', status: 'needsAction' }, { title: 'Old', status: 'completed' }, { title: '' }] };
+      return {};
+    });
+    const { gateway } = fakeGateway({ proxy });
+    await expect(tasks.collect(gateway, account, NOW)).resolves.toEqual([{ task: 'Send invoice', due: '2026-11-09', list: 'Work', notes: 'For Pat' }]);
+    expect(seen.every((r) => r.method === 'GET' && r.accountId === 'ca_1')).toBe(true);
+    expect(seen[1]!.query).toMatchObject({ showCompleted: 'false' });
+  });
+
+  it('describes a task with its due date', () => {
+    expect(describeItem({ task: 'Send invoice', due: '2026-11-09' }, 'UTC')).toBe('Send invoice, due 2026-11-09');
+    expect(describeItem({ task: 'Send invoice', due: null }, 'UTC')).toBe('Send invoice');
   });
 });
 

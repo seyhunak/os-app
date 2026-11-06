@@ -16,7 +16,7 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 ## How it works
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
-2. **Choose your tools.** Gmail, Google Calendar, GitHub, Slack, Todoist, Linear and Hacker News.
+2. **Choose your tools.** Gmail, Google Calendar, Google Tasks, GitHub, Slack, Todoist, Linear and Hacker News.
 3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Without an OpenRouter key, you get a plain list of what was found.
 4. **Choose a schedule.** Pick morning or evening briefs, the time, the days and the timezone. The server writes them, and any device can read them.
 
@@ -77,6 +77,7 @@ Use `npx expo run:android` for Android. In the app, enter your server's address 
 | GitHub | Open issues and pull requests assigned to you |
 | Slack | The 10 latest messages in up to 5 channels you belong to |
 | Todoist | Your open tasks |
+| Google Tasks | Open tasks, due dates and notes from up to 10 task lists |
 | Linear | Your 50 latest issues |
 | Hacker News | AI-related stories from the front page |
 
