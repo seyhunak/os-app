@@ -47,6 +47,8 @@ npm start
 
 The first start prints your server token and saves it in `~/.os-app/token`. Open <http://127.0.0.1:8787>, paste the token, and follow the steps.
 
+To keep it running on a Mac and reach it from your other devices, follow [SETUP.md](SETUP.md). It covers the background service, Tailscale, web and mobile.
+
 ### Try it without any accounts
 
 This runs the real server and app against fake tool data. Build the web app first, as above:
