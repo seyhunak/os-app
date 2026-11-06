@@ -30,6 +30,8 @@ export interface ParsedBrief {
   /** False for older briefs, which render as plain Markdown. */
   structured: boolean;
   notice: string | null;
+  /** The one thing to do first and the goal it moves. */
+  focus: string | null;
   priorities: Priority[];
   /** Used when the priorities section isn't a ranked list, such as an unranked digest. */
   prioritiesText: string | null;
@@ -43,6 +45,20 @@ export interface ParsedBrief {
 const ARROW = /\s*(?:→|->)\s*/;
 const clean = (text: string) => text.replace(/\*\*/g, '').replace(/\s+/g, ' ').trim();
 const bullets = (text: string) => text.split('\n').map((l) => l.trim()).filter((l) => /^[-*]\s/.test(l)).map((l) => l.replace(/^[-*]\s+/, ''));
+
+/** Older briefs kept their sources in a table, which doesn't read well on a phone. */
+function sourcesAsText(section: string): string {
+  const rows = section.split('\n').map((l) => l.trim());
+  if (!rows.some((l) => l.startsWith('|'))) return section;
+  return rows
+    .filter((l) => l && !/^\|\s*Source\s*\|/i.test(l) && !/^\|[\s:|-]+\|$/.test(l))
+    .map((l) => {
+      if (!l.startsWith('|')) return l;
+      const [name = '', ...rest] = l.replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim());
+      return `- **${name}:** ${rest.filter(Boolean).map((cell) => (/^\d+$/.test(cell) ? `${cell} ${cell === '1' ? 'item' : 'items'}` : cell)).join(', ')}`;
+    })
+    .join('\n');
+}
 
 function sectionsOf(markdown: string): Map<string, string> {
   const sections = new Map<string, string>();
@@ -139,7 +155,7 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
   const prioritiesRaw = sections.get('signals') ?? sections.get("today's priorities");
   const goalsRaw = sections.get('goals');
   const notice = markdown.split('\n').find((l) => l.trim().startsWith('>'))?.replace(/^\s*>\s*/, '').trim() ?? null;
-  const empty: ParsedBrief = { structured: false, notice, priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
+  const empty: ParsedBrief = { structured: false, notice, focus: null, priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
   if (prioritiesRaw === undefined) return empty;
 
   const noiseAt = prioritiesRaw.search(/^\s*\*{0,2}\s*Noise eliminated/im);
@@ -158,6 +174,7 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
   return {
     structured: true,
     notice,
+    focus: clean(sections.get('focus') ?? '') || null,
     priorities: ranked ? priorities : [],
     prioritiesText: ranked ? null : signalsPart.trim() || null,
     // The model sometimes repeats a signal here, so anything already a signal is dropped.
@@ -165,7 +182,7 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
       .filter((n) => !/already (included|listed|a signal)/i.test(n.reason ?? '') && !priorities.some((p) => n.item.includes(p.headline))),
     goals,
     goalsText: extras || null,
-    sources: sections.get('sources')?.trim() || null,
+    sources: sourcesAsText(sections.get('sources')?.trim() ?? '') || null,
     note: sections.get('note for next brief')?.trim() || null,
   };
 }

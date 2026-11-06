@@ -5,6 +5,7 @@ import { ApiError, createApi, type LedgerEntry } from './api';
 import type { Connection } from './storage';
 
 const OFFLINE_CHECK_MS = 10_000;
+const ONLINE_CHECK_MS = 30_000;
 const ONLINE_SYNC_MS = 300_000;
 const RESUME_SYNC_MS = 60_000;
 const SAVED_BRIEFS = 30;
@@ -53,6 +54,7 @@ export function createOfflineApi(connection: Connection) {
   let syncInFlight: Promise<void> | null = null;
   let flushInFlight: Promise<void> | null = null;
   let lastSync = 0;
+  let lastCheck = 0;
 
   const setOnline = (online: boolean) => {
     if (online === state.online) return;
@@ -147,6 +149,7 @@ export function createOfflineApi(connection: Connection) {
 
   /** Looks for the server at its saved address. */
   const check = async () => {
+    lastCheck = Date.now();
     try {
       await api.status();
       setOnline(true);
@@ -212,6 +215,8 @@ export function createOfflineApi(connection: Connection) {
       const timer = setInterval(() => {
         if (!state.online) void check();
         else if (Date.now() - lastSync > ONLINE_SYNC_MS) void sync();
+        // Notices a lost server soon, so the status shown in Settings stays true.
+        else if (Date.now() - lastCheck > ONLINE_CHECK_MS) void check();
       }, OFFLINE_CHECK_MS);
       const appState = AppState.addEventListener('change', (next) => {
         if (next !== 'active') return;

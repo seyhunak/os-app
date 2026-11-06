@@ -90,9 +90,20 @@ Check the contract.`;
     expect(parsed.priorities.map((p) => p.headline)).toEqual(['Contract', 'Call']);
     expect(parsed.noise).toEqual([{ item: 'Newsletter', reason: 'irrelevant' }]);
     expect(parsed.goals[0]).toMatchObject({ goal: 'Ship', status: 'attention' });
-    expect(parsed.sources).toContain('| Gmail | 2 |');
+    expect(parsed.sources).toContain('- **Gmail:** 2 items');
     expect(parsed.note).toBe('Check the contract.');
     expect(parsed.notice).toBeNull();
+  });
+
+  it('turns the source table in an older brief into plain lines', () => {
+    const parsed = parseBrief('### Signals\n- ⚡ [A] x → y | Score: 61\n### Sources\n| Source | Items | Status |\n|---|---|---|\n| Gmail | 5 | Pulled today |\n| Slack | 1 | Failed |');
+    expect(parsed.sources).toBe('- **Gmail:** 5 items, Pulled today\n- **Slack:** 1 item, Failed');
+    expect(parseBrief('### Signals\n- x\n### Sources\n- **Gmail:** Fine').sources).toBe('- **Gmail:** Fine');
+  });
+
+  it('reads the focus, and goes without one in older briefs', () => {
+    expect(parseBrief('### Focus\nReply to **Sam**\nfirst.\n### Signals\n- ⚡ [A] x → y | Score: 61').focus).toBe('Reply to Sam first.');
+    expect(parseBrief('### Signals\n- ⚡ [A] x → y | Score: 61').focus).toBeNull();
   });
 
   it('keeps a digest unranked, including its notice and updates', () => {

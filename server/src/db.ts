@@ -12,6 +12,9 @@ export interface SourceReport {
   /** Plain words for the status, as shown in the source table. */
   label?: string;
   /** One line for each thing read from this source, so you can see what the brief drew on. */
+  /** A sentence or two about what was read. */
+  summary?: string;
+  /** Older briefs saved items instead of a summary. */
   contents?: string[];
 }
 

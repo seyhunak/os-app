@@ -2,11 +2,28 @@ import type { Connection } from './storage';
 
 export type Kind = 'morning' | 'evening';
 
+export type Provider = 'openrouter' | 'ollama';
+
+export interface ModelOption {
+  id: string;
+  note: string | null;
+  cloud: boolean;
+}
+
 export interface Status {
+  /** Missing from a status saved before servers reported it. */
+  machine?: string;
   composio: 'environment' | 'saved' | null;
   openrouter: 'environment' | 'saved' | null;
   composioHint: string | null;
   openrouterHint: string | null;
+  /** The rest are missing from a status saved before servers reported them. */
+  provider?: Provider;
+  ollama?: 'environment' | 'saved' | null;
+  ollamaHint?: string | null;
+  openrouterModel?: string;
+  ollamaModel?: string;
+  ollamaUrl?: string;
   model: string;
   timezone: string | null;
   selectedToolkits: string[];
@@ -30,6 +47,9 @@ export interface Source {
   items: number;
   detail?: string;
   label?: string;
+  /** A sentence or two about what was read. */
+  summary?: string;
+  /** Older briefs saved items instead of a summary. */
   contents?: string[];
 }
 
@@ -121,7 +141,10 @@ export function createApi({ url, token }: Connection) {
     status: () => request<Status>('/status'),
     saveComposioKey: (apiKey: string) => request('/credentials/composio', 'PUT', { apiKey }),
     saveOpenRouterKey: (apiKey: string) => request('/credentials/openrouter', 'PUT', { apiKey }),
-    removeCredential: (name: 'composio' | 'openrouter') => request(`/credentials/${name}`, 'DELETE'),
+    saveOllamaKey: (apiKey: string) => request('/credentials/ollama', 'PUT', { apiKey }),
+    removeCredential: (name: 'composio' | 'openrouter' | 'ollama') => request(`/credentials/${name}`, 'DELETE'),
+    saveAi: (input: { provider: Provider; model: string; ollamaUrl?: string }) => request('/ai', 'PUT', input),
+    aiModels: (provider: Provider, url?: string) => request<{ models: ModelOption[]; error: string | null }>(`/ai/models?provider=${provider}${url ? `&url=${encodeURIComponent(url)}` : ''}`),
     toolkits: (fresh = false) => request<{ toolkits: Toolkit[]; error: string | null; needsAuth: boolean }>(`/toolkits${fresh ? '?fresh=1' : ''}`),
     selectToolkits: (slugs: string[]) => request('/toolkits/selection', 'PUT', { slugs }),
     connectToolkit: (slug: string) => request<{ redirectUrl: string | null }>(`/toolkits/${slug}/connect`, 'POST'),

@@ -11,6 +11,7 @@ export interface ProxyRequest {
   endpoint: string;
   method: 'GET' | 'POST';
   query?: Record<string, string | number>;
+  headers?: Record<string, string>;
   body?: unknown;
 }
 
@@ -77,14 +78,18 @@ export function createComposioGateway(apiKey: string, userId: string): ComposioG
       }
     },
 
-    async proxy({ accountId, endpoint, method, query, body }) {
+    async proxy({ accountId, endpoint, method, query, headers, body }) {
+      const parameters = [
+        ...Object.entries(query ?? {}).map(([name, value]) => ({ in: 'query' as const, name, value })),
+        ...Object.entries(headers ?? {}).map(([name, value]) => ({ in: 'header' as const, name, value })),
+      ];
       try {
         const result = await client.tools.proxyExecute({
           endpoint,
           method,
           connectedAccountId: accountId,
           ...(body === undefined ? {} : { body }),
-          ...(query ? { parameters: Object.entries(query).map(([name, value]) => ({ in: 'query' as const, name, value })) } : {}),
+          ...(parameters.length ? { parameters } : {}),
         });
         if (result.status >= 400) throw new Error(`HTTP ${result.status} from ${endpoint}`);
         return result.data;

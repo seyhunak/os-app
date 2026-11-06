@@ -85,25 +85,34 @@ function GoalLine({ priority }: { priority: Priority }) {
   );
 }
 
-/** Everything read from one source, so you can see what the brief drew on. */
-function SourceList({ source }: { source: Source }) {
+/** Older briefs saved items rather than a summary, so a few of those stand in for it. */
+const OLD_ITEMS_SHOWN = 5;
+
+/** What one source added up to, never a list of everything in it. */
+function SourceSummary({ source }: { source: Source }) {
   const c = useColors();
-  const contents = source.contents ?? [];
-  const hidden = source.items - contents.length;
+  const old = source.summary === undefined ? (source.contents ?? []).slice(0, OLD_ITEMS_SHOWN) : [];
+  const hidden = old.length ? source.items - old.length : 0;
+  const body = { color: c.text, fontFamily: F.text, fontSize: 16, lineHeight: 24 };
   return (
-    <View style={{ gap: 6 }}>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', columnGap: 12 }}>
-        <Text style={{ color: c.text, fontFamily: F.bold, fontSize: 18, lineHeight: 25 }}>{source.name}</Text>
-        <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 25 }}>{count(source.items, 'item')}{source.label ? `, ${source.label.toLowerCase()}` : ''}</Text>
-      </View>
+    <View style={{ gap: 4 }}>
+      <Text style={{ color: c.text, fontFamily: F.bold, fontSize: 18, lineHeight: 25 }}>{source.name}</Text>
+      {source.summary ? <Text style={body}>{source.summary}</Text> : null}
+      {old.map((item, i) => <Text key={i} style={body}>{item}</Text>)}
+      {source.label ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>{source.label}</Text> : null}
       {source.detail ? <Text style={{ color: c.danger, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>{source.detail}</Text> : null}
-      {contents.map((item, i) => (
-        <View key={i} style={{ flexDirection: 'row', gap: 8 }}>
-          <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 16, lineHeight: 23 }}>•</Text>
-          <Text style={{ flex: 1, color: c.text, fontFamily: F.text, fontSize: 16, lineHeight: 23 }}>{item}</Text>
-        </View>
-      ))}
       {hidden > 0 ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>and {hidden} more</Text> : null}
+    </View>
+  );
+}
+
+/** A short passage set apart from the page: where to start, and what to pick up next time. */
+function Callout({ title, children }: { title: string; children: string }) {
+  const c = useColors();
+  return (
+    <View style={{ gap: 10, borderTopWidth: 3, borderColor: c.accent, paddingTop: 14 }}>
+      <Text accessibilityRole="header" style={{ color: c.accent, fontFamily: F.sansBold, fontSize: 13, lineHeight: 18 }}>{title}</Text>
+      <Text style={{ color: c.text, fontFamily: F.italic, fontSize: 21, lineHeight: 29 }}>{children}</Text>
     </View>
   );
 }
@@ -216,13 +225,13 @@ function FrontPage({ brief, wide }: { brief: Brief; wide: boolean }) {
     </Collapsible>
   ) : null;
 
-  // Older briefs have no saved contents, so they show their source table instead.
-  const listed = brief.sources.length > 0 && brief.sources.every((s) => s.contents);
-  const read = brief.sources.reduce((total, s) => total + s.items, 0);
+  // The oldest briefs saved neither, so they show their source list from the brief's text.
+  const listed = brief.sources.length > 0 && brief.sources.every((s) => s.summary !== undefined || s.contents);
 
   return (
     <View style={{ gap: 22 }}>
       <Masthead brief={brief} wide={wide} />
+      {parsed.focus ? <Callout title="Your focus">{parsed.focus}</Callout> : null}
       {wide ? (
         <View style={{ flexDirection: 'row', gap: 32, alignItems: 'flex-start' }}>
           <View style={{ flex: 2 }}>{signals}</View>
@@ -239,9 +248,9 @@ function FrontPage({ brief, wide }: { brief: Brief; wide: boolean }) {
       {listed || parsed.sources ? (
         <>
           <Rule />
-          <Collapsible title="Sources" {...(listed ? { summary: count(read, 'item') } : {})} defaultOpen>
+          <Collapsible title="Sources" {...(listed ? { summary: count(brief.sources.length, 'source') } : {})} defaultOpen>
             {listed ? (
-              <View style={{ gap: 18 }}>{brief.sources.map((s) => <SourceList key={s.toolkit} source={s} />)}</View>
+              <View style={{ gap: 18 }}>{brief.sources.map((s) => <SourceSummary key={s.toolkit} source={s} />)}</View>
             ) : <Markdown source={parsed.sources ?? ''} />}
           </Collapsible>
         </>
@@ -254,12 +263,7 @@ function FrontPage({ brief, wide }: { brief: Brief; wide: boolean }) {
           </Collapsible>
         </>
       ) : null}
-      {parsed.note ? (
-        <View style={{ gap: 10, borderTopWidth: 3, borderColor: c.accent, paddingTop: 14 }}>
-          <Text accessibilityRole="header" style={{ color: c.accent, fontFamily: F.sansBold, fontSize: 13, lineHeight: 18 }}>Note for next brief</Text>
-          <Text style={{ color: c.text, fontFamily: F.italic, fontSize: 21, lineHeight: 29 }}>{parsed.note}</Text>
-        </View>
-      ) : null}
+      {parsed.note ? <Callout title="Note for next brief">{parsed.note}</Callout> : null}
     </View>
   );
 }

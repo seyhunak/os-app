@@ -1,6 +1,6 @@
 import { toolkitBySlug } from './collectors.ts';
 import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio.ts';
-import { describeComposeError, describeItem, extractNote, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer } from './compose.ts';
+import { describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer } from './compose.ts';
 import type { Brief, Kind, SourceReport, Store } from './db.ts';
 import { redact, redactDeep } from './redact.ts';
 
@@ -28,8 +28,6 @@ const LEDGER_DAYS = 14;
 const LEDGER_ENTRIES = 50;
 /** How long to wait before calling a failing tool again. Refetch skips the wait. */
 const FAILURE_RETRY_MS = 3_600_000;
-/** How many items each source lists in a brief. */
-const SOURCE_CONTENTS = 25;
 
 export const selectedToolkits = (store: Store): string[] => JSON.parse(store.getSetting('selected_toolkits') ?? '[]');
 
@@ -52,10 +50,12 @@ export class BriefService {
     const date = localDate(now, zone);
     store.pruneCache();
 
-    const { facts, sources } = await this.gather(kind, date, now, Boolean(refresh));
+    const { facts, sources } = await this.gather(kind, date, now, zone, Boolean(refresh));
     for (const source of sources) {
       source.label = STATUS_LABEL[source.status];
-      source.contents = (facts[source.toolkit] ?? []).slice(0, SOURCE_CONTENTS).map((item) => describeItem(item as Record<string, unknown>, zone));
+      const items = (facts[source.toolkit] ?? []) as Array<Record<string, unknown>>;
+      const read = source.status === 'live' || source.status === 'cache';
+      source.summary = items.length ? toolkitBySlug(source.toolkit)!.summarize(items, zone) : read ? 'Nothing to report.' : '';
     }
     const input = {
       kind,
@@ -85,13 +85,21 @@ export class BriefService {
       body = renderDigest(input, 'no OpenRouter key is set');
     }
 
+    const { body: rest, summaries } = extractSourceSummaries(body);
+    for (const source of sources) {
+      const written = source.items ? summaries.get(source.name.toLowerCase()) : undefined;
+      if (written) source.summary = written;
+      source.summary = redact(source.summary ?? '');
+    }
+    body = rest;
+
     const table = renderSources(sources);
     const markdown = redact(body.includes(SOURCES_MARKER) ? body.replace(SOURCES_MARKER, () => table) : `${body}\n\n### Sources\n${table}`);
     return store.addBrief({ kind, trigger, generator, markdown, sources });
   }
 
   /** The skill's budget: one live pull per toolkit per day, evenings never pull, a 429 stops that toolkit for the day. */
-  private async gather(kind: Kind, date: string, now: Date, refresh: boolean) {
+  private async gather(kind: Kind, date: string, now: Date, timeZone: string, refresh: boolean) {
     const { store } = this.deps;
     const gateway = this.deps.gateway();
     const facts: Record<string, unknown[]> = {};
@@ -107,6 +115,7 @@ export class BriefService {
       if (!toolkit) continue;
       const report = (status: SourceReport['status'], items = 0, detail?: string) =>
         sources.push({ toolkit: slug, name: toolkit.name, status, items, ...(detail ? { detail } : {}) });
+      const kept = (items: unknown[]) => toolkit.keep?.(items, now, timeZone) ?? items;
 
       const cached = store.getPull(date, slug);
       if (cached?.status === 'rate_limited') {
@@ -115,8 +124,8 @@ export class BriefService {
       }
       const refetching = refresh && kind === 'morning';
       if (cached?.status === 'ok' && !refetching) {
-        facts[slug] = cached.items;
-        report('cache', cached.items.length, cached.detail);
+        facts[slug] = kept(cached.items);
+        report('cache', facts[slug].length, cached.detail);
         continue;
       }
       // A failing tool is left alone for a while, instead of being called again by every brief.
@@ -151,7 +160,7 @@ export class BriefService {
       let rateLimited = false;
       for (const account of toolkit.noAuth ? [null] : owned) {
         try {
-          items.push(...redactDeep(await toolkit.collect(gateway, account, now)));
+          items.push(...redactDeep(await toolkit.collect(gateway, account, now, timeZone)));
         } catch (error) {
           if (error instanceof RateLimitError) {
             rateLimited = true;
@@ -163,14 +172,14 @@ export class BriefService {
 
       if (rateLimited) {
         store.savePull(date, slug, { status: 'rate_limited', items: [] }, now);
-        report('rate_limited', items.length);
-        if (items.length) facts[slug] = items;
+        report('rate_limited', kept(items).length);
+        if (items.length) facts[slug] = kept(items);
       } else if (failures.length && !items.length) {
         const detail = failures.join('; ');
         if (cached?.status === 'ok') {
           // A failed refetch keeps the data from earlier today.
-          facts[slug] = cached.items;
-          report('cache', cached.items.length, `Refetch failed: ${detail}`);
+          facts[slug] = kept(cached.items);
+          report('cache', facts[slug].length, `Refetch failed: ${detail}`);
         } else {
           store.savePull(date, slug, { status: 'failed', items: [], detail }, now);
           report('error', 0, detail);
@@ -178,8 +187,8 @@ export class BriefService {
       } else {
         const detail = failures.length ? `Some accounts failed: ${failures.join('; ')}` : undefined;
         store.savePull(date, slug, { status: 'ok', items, ...(detail ? { detail } : {}) }, now);
-        facts[slug] = items;
-        report('live', items.length, detail);
+        facts[slug] = kept(items);
+        report('live', facts[slug].length, detail);
       }
     }
     return { facts, sources };
