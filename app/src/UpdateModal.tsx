@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Api, LedgerEntry } from './api';
 import { Button, ErrorNote, message, useColors, F } from './ui';
 
@@ -11,15 +12,16 @@ const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday:
 /** A short note on what you've done. It goes into the ledger, and every brief reads it. */
 export function UpdateModal({ api, visible, onClose }: { api: Api; visible: boolean; onClose(): void }) {
   const c = useColors();
+  const insets = useSafeAreaInsets();
   const [text, setText] = useState('');
   const [recent, setRecent] = useState<LedgerEntry[]>([]);
   const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<'server' | 'device' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
-    setSaved(false);
+    setSaved(null);
     setError(null);
     api.ledger().then((r) => setRecent(r.entries.slice(0, RECENT))).catch(() => setRecent([]));
   }, [api, visible]);
@@ -31,7 +33,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
       const entry = await api.addUpdate(text.trim());
       setRecent((list) => [entry, ...list].slice(0, RECENT));
       setText('');
-      setSaved(true);
+      setSaved(entry.pending ? 'device' : 'server');
     } catch (e) {
       setError(message(e));
     } finally {
@@ -43,7 +45,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
         {/* Tapping outside doesn't close it, so a half-written update isn't lost. */}
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 16, paddingTop: insets.top + 8 }}>
           <View accessibilityViewIsModal style={{ width: '100%', maxWidth: 520, maxHeight: '90%', backgroundColor: c.card, borderRadius: 6 }}>
             <ScrollView contentContainerStyle={{ padding: 20, gap: 14 }} keyboardShouldPersistTaps="handled">
               <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 26, lineHeight: 31 }}>What have you done so far?</Text>
@@ -53,13 +55,13 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
                 multiline
                 maxLength={MAX_LENGTH}
                 value={text}
-                onChangeText={(value) => { setText(value); setSaved(false); }}
+                onChangeText={(value) => { setText(value); setSaved(null); }}
                 placeholder="For example: sent the proposal to Sam and fixed the login bug."
                 placeholderTextColor={c.muted}
                 style={{ minHeight: 110, borderWidth: 1, borderColor: c.line, borderRadius: 4, padding: 14, color: c.text, fontFamily: F.text, fontSize: 18, lineHeight: 26, textAlignVertical: 'top' }}
               />
               {saved ? (
-                <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>Saved. Your next brief will use this.</Text>
+                <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>{saved === 'device' ? "Saved on this device. It'll sync when your Mac is back." : 'Saved. Your next brief will use this.'}</Text>
               ) : (
                 <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>Saved to your ledger. Every brief reads your updates from the last 14 days. Updates can't be edited later.</Text>
               )}
@@ -73,7 +75,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
                   <Text accessibilityRole="header" style={{ color: c.text, fontSize: 15, fontFamily: F.sansBold }}>Recent updates</Text>
                   {recent.map((entry) => (
                     <View key={entry.id} style={{ gap: 2 }}>
-                      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12 }}>{when(entry.createdAt)}</Text>
+                      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12 }}>{when(entry.createdAt)}{entry.pending ? ', waiting to sync' : ''}</Text>
                       <Text style={{ color: c.text, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>{entry.text}</Text>
                     </View>
                   ))}

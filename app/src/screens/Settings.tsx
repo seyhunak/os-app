@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
 import { COMPOSIO_URL, type Api, type Status } from '../api';
+import { useConnection, type OfflineApi } from '../offline';
 import { clearConnection, type Connection } from '../storage';
 import { ToolList } from '../ToolList';
 import { Button, Card, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
@@ -66,12 +67,18 @@ function GoalsSection({ api }: { api: Api }) {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const { online, refreshKey } = useConnection();
+  const editing = useRef(false);
+  editing.current = expanded;
   useEffect(() => {
+    // A sync never replaces goals you're in the middle of editing.
+    if (goals !== null && editing.current) return;
     api.goals().then((r) => {
       setGoals(r.goals);
       setExpanded(!r.goals.trim());
     }).catch((e) => setError(message(e)));
-  }, [api]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, refreshKey]);
 
   const save = async () => {
     setBusy(true);
@@ -123,7 +130,7 @@ function GoalsSection({ api }: { api: Api }) {
       ) : null}
       {!expanded && lines.length ? (
         <View style={{ gap: 4 }}>
-          {saved ? <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontFamily: F.sansMedium, fontSize: 14 }}>Goals saved.</Text> : null}
+          {saved ? <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontFamily: F.sansMedium, fontSize: 14 }}>{online ? 'Goals saved.' : 'Saved on this device. Goals sync when your Mac is back.'}</Text> : null}
           {lines.slice(0, 3).map((line, i) => <Text key={i} numberOfLines={1} style={{ color: c.text, fontFamily: F.text, fontSize: 17, lineHeight: 25 }}>{line}</Text>)}
           {lines.length > 3 ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13 }}>and {lines.length - 3} more</Text> : null}
         </View>
@@ -133,9 +140,11 @@ function GoalsSection({ api }: { api: Api }) {
 }
 
 export function SettingsScreen({ api, status, connection, onChanged, onSignOut }: {
-  api: Api; status: Status; connection: Connection; onChanged(): void; onSignOut(): void;
+  api: OfflineApi; status: Status; connection: Connection; onChanged(): void; onSignOut(): void;
 }) {
   const c = useColors();
+  const { pending } = useConnection();
+
   return (
     <Screen>
       <Title>Settings</Title>
@@ -148,7 +157,10 @@ export function SettingsScreen({ api, status, connection, onChanged, onSignOut }
       <Section title="Server">
         <View style={{ gap: 10 }}>
           <Text selectable style={{ color: c.muted, fontFamily: F.sans, fontSize: 14 }}>{connection.url}</Text>
-          <Button label="Disconnect this device" variant="danger" onPress={() => void clearConnection().then(onSignOut)} />
+          <Button label="Disconnect this device" variant="danger" disabled={pending > 0} onPress={() => void api.forgetDevice().then(clearConnection).then(onSignOut)} />
+          <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>
+            {pending > 0 ? 'Available once your waiting changes have synced, so nothing is lost.' : 'Also removes the briefs and updates saved on this device.'}
+          </Text>
         </View>
       </Section>
     </Screen>

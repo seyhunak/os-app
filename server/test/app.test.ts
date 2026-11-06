@@ -7,6 +7,7 @@ import { createApp } from '../src/app.ts';
 import { toolkitBySlug } from '../src/collectors.ts';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/composio.ts';
 import { createOpenRouterComposer, describeComposeError, describeItem, extractNote, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
+import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/db.ts';
 import { redact } from '../src/redact.ts';
 import { toCron } from '../src/scheduler.ts';
@@ -546,6 +547,41 @@ describe('Google Tasks collector', () => {
   it('describes a task with its due date', () => {
     expect(describeItem({ task: 'Send invoice', due: '2026-11-09' }, 'UTC')).toBe('Send invoice, due 2026-11-09');
     expect(describeItem({ task: 'Send invoice', due: null }, 'UTC')).toBe('Send invoice');
+  });
+});
+
+describe('offline updates', () => {
+  it('saves a retried update only once', async () => {
+    const { call } = setup();
+    const body = { text: 'Called Sam', clientId: 'device-update-1', createdAt: '2026-11-05T09:00:00.000Z' };
+    const first = await (await call('/api/ledger', 'POST', body)).json();
+    const retry = await (await call('/api/ledger', 'POST', body)).json();
+    expect(retry.id).toBe(first.id);
+    expect((await (await call('/api/ledger')).json()).entries).toHaveLength(1);
+  });
+
+  it('keeps when it was written, in time order, but not a future time', async () => {
+    const { call } = setup();
+    await call('/api/ledger', 'POST', { text: 'Newer', clientId: 'device-update-2', createdAt: '2026-11-06T05:00:00.000Z' });
+    await call('/api/ledger', 'POST', { text: 'Older, sent later', clientId: 'device-update-3', createdAt: '2026-11-04T05:00:00.000Z' });
+    const future = await (await call('/api/ledger', 'POST', { text: 'Future', clientId: 'device-update-4', createdAt: '2030-01-01T00:00:00.000Z' })).json();
+    expect(future.createdAt).toBe(NOW.toISOString());
+    const { entries } = await (await call('/api/ledger')).json();
+    expect(entries.map((e: { text: string }) => e.text)).toEqual(['Future', 'Newer', 'Older, sent later']);
+    expect((await call('/api/ledger', 'POST', { text: 'x', createdAt: 'not a date' })).status).toBe(400);
+  });
+
+  it('upgrades a ledger from before this existed, keeping its entries', () => {
+    const path = join(mkdtempSync(join(tmpdir(), 'os-migrate-')), 'os.db');
+    const old = new DatabaseSync(path);
+    old.exec('CREATE TABLE ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL, created_at TEXT NOT NULL)');
+    old.prepare('INSERT INTO ledger (text, created_at) VALUES (?, ?)').run('Before', '2026-11-01T00:00:00.000Z');
+    old.close();
+    const store = new Store(path, randomBytes(32));
+    expect(store.listLedger().map((e) => e.text)).toEqual(['Before']);
+    store.addLedgerEntry('After', { clientId: 'device-update-5' });
+    store.addLedgerEntry('After', { clientId: 'device-update-5' });
+    expect(store.listLedger()).toHaveLength(2);
   });
 });
 

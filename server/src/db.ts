@@ -74,6 +74,14 @@ export class Store {
         id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, time TEXT NOT NULL, days TEXT NOT NULL,
         timezone TEXT NOT NULL, enabled INTEGER NOT NULL, last_run_at TEXT, last_status TEXT);
     `);
+    this.migrateLedger();
+  }
+
+  /** Existing databases get the column that lets a device safely retry sending an update. */
+  private migrateLedger(): void {
+    const columns = this.db.prepare('PRAGMA table_info(ledger)').all() as Row[];
+    if (!columns.some((column) => column.name === 'client_id')) this.db.exec('ALTER TABLE ledger ADD COLUMN client_id TEXT');
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ledger_client_id ON ledger (client_id) WHERE client_id IS NOT NULL');
   }
 
   getSetting(key: string): string | null {
@@ -154,15 +162,20 @@ export class Store {
   }
 
   /** Append-only: entries are never edited or removed. */
-  addLedgerEntry(text: string): LedgerEntry {
-    const createdAt = new Date().toISOString();
-    const result = this.db.prepare('INSERT INTO ledger (text, created_at) VALUES (?, ?)').run(text, createdAt);
+  addLedgerEntry(text: string, options: { clientId?: string; createdAt?: string } = {}): LedgerEntry {
+    if (options.clientId) {
+      // A device retrying after a lost reply gets the entry it already created.
+      const existing = this.db.prepare('SELECT * FROM ledger WHERE client_id = ?').get(options.clientId) as Row | undefined;
+      if (existing) return { id: Number(existing.id), text: String(existing.text), createdAt: String(existing.created_at) };
+    }
+    const createdAt = options.createdAt ?? new Date().toISOString();
+    const result = this.db.prepare('INSERT INTO ledger (text, created_at, client_id) VALUES (?, ?, ?)').run(text, createdAt, options.clientId ?? null);
     return { id: Number(result.lastInsertRowid), text, createdAt };
   }
 
   /** Newest first. */
   listLedger(limit = 30, since?: string): LedgerEntry[] {
-    const rows = this.db.prepare('SELECT * FROM ledger WHERE created_at >= ? ORDER BY id DESC LIMIT ?').all(since ?? '', limit) as Row[];
+    const rows = this.db.prepare('SELECT * FROM ledger WHERE created_at >= ? ORDER BY created_at DESC, id DESC LIMIT ?').all(since ?? '', limit) as Row[];
     return rows.map((row) => ({ id: Number(row.id), text: String(row.text), createdAt: String(row.created_at) }));
   }
 

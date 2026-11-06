@@ -230,8 +230,15 @@ export function createApp(deps: AppDeps) {
 
   app.get('/api/ledger', (c) => c.json({ entries: store.listLedger() }));
   app.post('/api/ledger', async (c) => {
-    const { text } = await parse(c, z.object({ text: z.string().trim().min(1, 'Write a short update first').max(1000, 'Keep updates under 1,000 characters') }));
-    return c.json(store.addLedgerEntry(redact(text)), 201);
+    const { text, clientId, createdAt } = await parse(c, z.object({
+      text: z.string().trim().min(1, 'Write a short update first').max(1000, 'Keep updates under 1,000 characters'),
+      clientId: z.string().min(8).max(100).optional(),
+      createdAt: z.string().datetime().optional(),
+    }));
+    // Updates written offline keep the time they were written, but can't claim to be from the future.
+    const now = deps.now?.() ?? new Date();
+    const when = createdAt && Date.parse(createdAt) < now.getTime() ? new Date(createdAt).toISOString() : now.toISOString();
+    return c.json(store.addLedgerEntry(redact(text), { ...(clientId ? { clientId } : {}), createdAt: when }), 201);
   });
 
   app.put('/api/settings/timezone', async (c) => {

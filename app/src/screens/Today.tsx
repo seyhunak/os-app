@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { Pressable, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
 import type { Api, Brief, Kind, Source } from '../api';
 import { Markdown } from '../Markdown';
+import { useConnection } from '../offline';
 import { parseBrief, type Goal, type GoalStatus, type NoiseItem, type Priority } from '../parseBrief';
 import { Button, ErrorNote, F, Loading, message, Screen, useColors, type Colors } from '../ui';
 
@@ -271,6 +272,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
   const [openId, setOpenId] = useState<number | null>(null);
   const [busy, setBusy] = useState<Kind | 'refresh' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const { online, refreshKey } = useConnection();
 
   const load = useCallback(async () => {
     try {
@@ -283,7 +285,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   const generate = async (kind: Kind, refresh = false) => {
     setBusy(refresh ? 'refresh' : kind);
@@ -324,12 +326,12 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
         <Rule heavy />
         <SectionTitle>New brief</SectionTitle>
         <View style={{ flexDirection: wide ? 'row' : 'column', gap: 10 }}>
-          <View style={wide ? { flex: 1 } : null}><Button label="New morning brief" variant="secondary" busy={busy === 'morning'} disabled={busy !== null} onPress={() => void generate('morning')} /></View>
-          <View style={wide ? { flex: 1 } : null}><Button label="New evening brief" variant="secondary" busy={busy === 'evening'} disabled={busy !== null} onPress={() => void generate('evening')} /></View>
-          <View style={wide ? { flex: 1 } : null}><Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null} onPress={() => void generate('morning', true)} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="New morning brief" variant="secondary" busy={busy === 'morning'} disabled={busy !== null || !online} onPress={() => void generate('morning')} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="New evening brief" variant="secondary" busy={busy === 'evening'} disabled={busy !== null || !online} onPress={() => void generate('evening')} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || !online} onPress={() => void generate('morning', true)} /></View>
         </View>
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>
-          OS reads each tool once a day and reuses that data, which keeps API use low. Refetch is for when something just changed.
+          {online ? 'OS reads each tool once a day and reuses that data, which keeps API use low. Refetch is for when something just changed.' : 'Your Mac writes new briefs, so these need a connection to it.'}
         </Text>
       </View>
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Switch, Text, View } from 'react-native';
 import type { Api, Schedule, ScheduleInput } from '../api';
+import { useConnection } from '../offline';
 import { describeDays, ScheduleEditor } from '../ScheduleEditor';
 import { Body, Button, Card, ErrorNote, Loading, message, Screen, Title, useColors, F } from '../ui';
 
@@ -24,9 +25,10 @@ export function SchedulesScreen({ api, onChanged }: { api: Api; onChanged(): voi
     }
   }, [api]);
 
+  const { refreshKey } = useConnection();
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
   const after = async (work: Promise<unknown>) => {
     await work;

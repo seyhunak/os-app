@@ -2,10 +2,11 @@ import { Newsreader_400Regular, Newsreader_400Regular_Italic, Newsreader_600Semi
 import { LibreFranklin_400Regular, LibreFranklin_500Medium, LibreFranklin_700Bold } from '@expo-google-fonts/libre-franklin';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { Platform, Pressable, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ApiError, createApi, type Status } from './src/api';
+import { ApiError, type Status } from './src/api';
+import { ConnectionContext, createOfflineApi, useConnection } from './src/offline';
 import { ComposioScreen, FirstBriefScreen, isOnboarded, PairScreen, ToolsScreen } from './src/screens/Onboarding';
 import { SchedulesScreen } from './src/screens/Schedules';
 import { SettingsScreen } from './src/screens/Settings';
@@ -52,6 +53,29 @@ function Header({ onUpdate }: { onUpdate(): void }) {
   );
 }
 
+const noSubscribe = () => () => undefined;
+const noState = () => null;
+
+/** Says when you're reading saved content, and what's waiting to be sent. */
+function ConnectionBanner({ onRetry }: { onRetry(): void }) {
+  const c = useColors();
+  const { online, syncing, pending, savedAt } = useConnection();
+  if (online && !syncing && !pending) return null;
+  const when = savedAt ? new Date(savedAt).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+  const waiting = pending ? `${pending === 1 ? '1 change' : `${pending} changes`} will sync when your Mac is back.` : 'Changes sync when your Mac is back.';
+  const message = !online ? `Offline${when ? `, showing what was saved ${when}` : ''}. ${waiting}` : 'Back online. Syncing…';
+  return (
+    <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.accentSoft }}>
+      <Text style={{ flex: 1, color: c.text, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{message}</Text>
+      {!online ? (
+        <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: c.text, fontFamily: F.sansBold, fontSize: 13 }}>Try now</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 function Root() {
   const c = useColors();
   const [connection, setConnection] = useState<Connection | null | undefined>(undefined);
@@ -60,7 +84,8 @@ function Root() {
   const [toolsDone, setToolsDone] = useState(false);
   const [tab, setTab] = useState<Tab>('today');
   const [updating, setUpdating] = useState(false);
-  const api = useMemo(() => (connection ? createApi(connection) : null), [connection]);
+  const api = useMemo(() => (connection ? createOfflineApi(connection) : null), [connection]);
+  const connectionState = useSyncExternalStore(api?.subscribe ?? noSubscribe, api?.getState ?? noState);
 
   const refresh = useCallback(async () => {
     if (!api) return;
@@ -82,7 +107,8 @@ function Root() {
   }, []);
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, connectionState?.refreshKey]);
+  useEffect(() => api?.start(), [api]);
 
   const body = () => {
     if (connection === undefined) return <Loading label="Starting…" />;
@@ -105,6 +131,7 @@ function Root() {
     return (
       <>
         <Header onUpdate={() => setUpdating(true)} />
+        <ConnectionBanner onRetry={() => void api.sync()} />
         <UpdateModal api={api} visible={updating} onClose={() => setUpdating(false)} />
         <View style={{ flex: 1 }}>
           {tab === 'today' ? <TodayScreen api={api} hasSchedules={status.hasSchedules} onSchedule={() => setTab('schedule')} /> : null}
@@ -117,10 +144,26 @@ function Root() {
   };
 
   return (
-    <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: c.bg }}>
-      {body()}
-    </SafeAreaView>
+    <ConnectionContext.Provider value={connectionState}>
+      <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: c.bg }}>
+        {body()}
+      </SafeAreaView>
+    </ConnectionContext.Provider>
   );
+}
+
+/** Lets the web app itself load without your Mac. Mobile apps already carry their own code. */
+function registerOfflineWeb() {
+  if (Platform.OS !== 'web' || !('serviceWorker' in navigator)) return;
+  void navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).then(async () => {
+    // This page loaded before the worker started, so save what it already fetched.
+    const urls = performance.getEntriesByType('resource').map((r) => r.name).filter((u) => {
+      const { origin, pathname } = new URL(u);
+      return origin === location.origin && !pathname.startsWith('/api/');
+    });
+    const cache = await caches.open('os-app-v1');
+    await Promise.allSettled(['/', ...urls].map((u) => cache.add(u)));
+  }).catch(() => undefined);
 }
 
 export default function App() {
@@ -133,6 +176,7 @@ export default function App() {
     LibreFranklin_500Medium,
     LibreFranklin_700Bold,
   });
+  useEffect(registerOfflineWeb, []);
   if (!fontsLoaded && !fontError) return null;
 
   return (

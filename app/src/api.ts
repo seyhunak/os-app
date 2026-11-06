@@ -59,6 +59,8 @@ export interface LedgerEntry {
   id: number;
   text: string;
   createdAt: string;
+  /** Written while offline, and not on your server yet. */
+  pending?: boolean;
 }
 
 export type ScheduleInput = Pick<Schedule, 'kind' | 'time' | 'days' | 'timezone' | 'enabled'>;
@@ -86,19 +88,31 @@ export function normalizeServerUrl(input: string): string {
   return url.origin;
 }
 
+const READ_TIMEOUT_MS = 10_000;
+
 export function createApi({ url, token }: Connection) {
   async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
     let response: Response;
+    const unreachable = () => new ApiError(`Can't reach your OS server at ${url}. Check that it's running.`, 0);
+    // Reads give up quickly so an outage shows saved content. Writing a brief can legitimately take a while.
+    const controller = new AbortController();
+    const timer = method === 'GET' ? setTimeout(() => controller.abort(), READ_TIMEOUT_MS) : null;
     try {
       response = await fetch(`${url}/api${path}`, {
         method,
+        signal: controller.signal,
         headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
-      throw new ApiError(`Can't reach your OS server at ${url}. Check that it's running.`, 0);
+      throw unreachable();
+    } finally {
+      if (timer) clearTimeout(timer);
     }
+    // Tailscale answers with these when the Mac is reachable but OS isn't running.
+    if (response.status === 502 || response.status === 503 || response.status === 504) throw unreachable();
     const data = await response.json().catch(() => null);
+    if (response.ok && data === null) throw unreachable();
     if (!response.ok) throw new ApiError(data?.error ?? `The server returned an error (${response.status}).`, response.status);
     return data as T;
   }
@@ -115,7 +129,7 @@ export function createApi({ url, token }: Connection) {
     saveGoals: (goals: string) => request('/goals', 'PUT', { goals }),
     saveTimezone: (timezone: string) => request('/settings/timezone', 'PUT', { timezone }),
     ledger: () => request<{ entries: LedgerEntry[] }>('/ledger'),
-    addUpdate: (text: string) => request<LedgerEntry>('/ledger', 'POST', { text }),
+    addUpdate: (text: string, meta?: { clientId: string; createdAt: string }) => request<LedgerEntry>('/ledger', 'POST', { text, ...meta }),
     briefs: () => request<{ briefs: Brief[] }>('/briefs'),
     generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }),
     schedules: () => request<{ schedules: Schedule[] }>('/schedules'),

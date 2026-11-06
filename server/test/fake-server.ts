@@ -2,7 +2,6 @@
  * The real API and web app with fake Composio data: no keys or accounts needed.
  * Use it to work on the UI: npm run dev:fake
  */
-import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -50,7 +49,8 @@ const gateway: ComposioGateway = {
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
-const store = new Store(join(mkdtempSync(join(tmpdir(), 'os-fake-')), 'os.db'), randomBytes(32));
+// FAKE_DIR keeps data across restarts, for trying out what happens during an outage.
+const store = new Store(join(process.env.FAKE_DIR ?? mkdtempSync(join(tmpdir(), 'os-fake-')), 'os.db'), Buffer.alloc(32, 7));
 const token = process.env.OS_TOKEN ?? 'fake-server-token-for-local-testing';
 /** A sample of what the AI writes. Set FAKE_DIGEST=1 to see the unranked version instead. */
 const sampleBrief = () => `# Good morning

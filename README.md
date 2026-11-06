@@ -124,6 +124,17 @@ Anyone who gets that build can read the token from it, so never share it.
 
 The app refuses plain `http://` for any address outside your local network, so your token isn't sent unencrypted.
 
+## Offline
+
+Your server runs on your own machine, so it can be out of reach. Web and mobile keep working when it is:
+
+- **Read:** your last 30 briefs, goals, schedules and updates are saved on each device.
+- **Write:** updates and goal edits made offline are queued on the device. Updates keep the time you wrote them, and are never saved twice. If two devices edit goals offline, the last one to sync wins.
+- **Reconnect:** the app checks for your server every 10 seconds while offline. When it's back, it sends what's queued and fetches anything new, such as briefs written on schedule.
+- **Needs your server:** writing a new brief, and changing schedules, tools or keys.
+
+Saved content is stored in the app's own storage, or in the browser's on web, without extra encryption. "Disconnect this device" removes it.
+
 ## Configuration
 
 Everything is optional. Copy [.env.example](.env.example) to `server/.env`, which is git-ignored and loaded at startup, or add your keys in the app. Each brief is capped at 4,000 output tokens. Set `OS_MODEL` to use any other OpenRouter model. If your connected accounts already exist in Composio under another user ID, set `OS_COMPOSIO_USER_ID` to match it.
