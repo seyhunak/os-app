@@ -1,0 +1,26 @@
+#!/bin/sh
+# Stops secrets from being committed. This repo is public.
+# Turned on by `npm run setup`. To check by hand: sh .githooks/pre-commit
+
+status=0
+
+# Files that should never be committed.
+blocked_files=$(git diff --cached --name-only --diff-filter=ACMR |
+  grep -E '(^|/)\.env(\..+)?$|(^|/)secret\.key$|\.db(-wal|-shm)?$|\.pem$' |
+  grep -vE '(^|/)\.env\.example$')
+if [ -n "$blocked_files" ]; then
+  echo "Commit blocked. These files must not be committed:"
+  echo "$blocked_files" | sed 's/^/  /'
+  status=1
+fi
+
+# Key values in any added line. File names are shown, but never the matching values.
+key_pattern='ak_[A-Za-z0-9_-]{18,}|sk-or-v1-[A-Za-z0-9]{20,}|sk-ant-[A-Za-z0-9_-]{20,}|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[A-Za-z0-9_-]{30,}|[a-z0-9-]+\.tail[a-z0-9]+\.ts\.net'
+for file in $(git diff --cached --name-only --diff-filter=ACMR); do
+  if git diff --cached -U0 -- "$file" | grep -E '^\+' | grep -v '^+++' | grep -qE "$key_pattern"; then
+    echo "Commit blocked. $file seems to contain a key or a private Tailscale address."
+    status=1
+  fi
+done
+
+exit $status

@@ -1,0 +1,16 @@
+{
+  "name": "os",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "setup": "git config core.hooksPath .githooks && npm --prefix server install && npm --prefix app install",
+    "build:web": "npm --prefix app run build:web",
+    "start": "npm --prefix server start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:fake": "npm --prefix server run dev:fake",
+    "dev:app": "npm --prefix app start",
+    "typecheck": "npm --prefix server run typecheck && npm --prefix app run typecheck",
+    "test": "npm --prefix server test"
+  }
+}
