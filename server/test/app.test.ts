@@ -350,6 +350,49 @@ describe('pull budget', () => {
     expect(brief.markdown).toContain('Hello');
   });
 
+  it('ifStale writes the day\'s first brief through the same budget', async () => {
+    const { call, execute } = await connected();
+    const response = await call('/api/briefs', 'POST', { kind: 'morning', ifStale: true });
+    expect(response.status).toBe(201);
+    expect((await response.json()).sources[0]).toMatchObject({ status: 'live', items: 1 });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('ifStale returns today\'s brief instead of writing another', async () => {
+    const { call, execute } = await connected();
+    const first = await (await call('/api/briefs', 'POST', { kind: 'morning' })).json();
+    const response = await call('/api/briefs', 'POST', { kind: 'morning', ifStale: true });
+    expect(response.status).toBe(200);
+    expect((await response.json()).id).toBe(first.id);
+    expect((await (await call('/api/briefs')).json()).briefs).toHaveLength(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('ifStale sent twice at once writes one brief', async () => {
+    const { call, execute } = await connected();
+    const [a, b] = await Promise.all([
+      call('/api/briefs', 'POST', { kind: 'morning', ifStale: true }),
+      call('/api/briefs', 'POST', { kind: 'morning', ifStale: true }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 201]);
+    expect((await a.json()).id).toBe((await b.json()).id);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('ifStale writes a new brief once the newest is from yesterday, reusing today\'s cache', async () => {
+    let now = new Date(NOW.getTime() - 86_400_000);
+    const { call, execute } = await connected({ clock: () => now });
+    const yesterday = await (await call('/api/briefs', 'POST', { kind: 'morning' })).json();
+    now = NOW;
+    const response = await call('/api/briefs', 'POST', { kind: 'morning', ifStale: true });
+    expect(response.status).toBe(201);
+    expect((await response.json()).id).not.toBe(yesterday.id);
+    expect(execute).toHaveBeenCalledTimes(2);
+    // A second stale request the same day returns that brief and spends nothing.
+    await call('/api/briefs', 'POST', { kind: 'morning', ifStale: true });
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
   it('makes no Composio calls at all once a brief is fully cached', async () => {
     const execute = vi.fn<ComposioGateway['execute']>(async () => ({ messages: [] }));
     const listActiveAccounts = vi.fn<ComposioGateway['listActiveAccounts']>(async () => [{ id: 'ca_1', toolkit: 'gmail', label: 'gmail' }]);

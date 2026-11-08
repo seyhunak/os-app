@@ -109,14 +109,16 @@ export function normalizeServerUrl(input: string): string {
 }
 
 const READ_TIMEOUT_MS = 10_000;
+/** How long the app waits for your Mac before showing saved content instead. */
+export const PROBE_TIMEOUT_MS = 3_000;
 
 export function createApi({ url, token }: Connection) {
-  async function request<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  async function request<T>(path: string, method = 'GET', body?: unknown, timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : 0): Promise<T> {
     let response: Response;
     const unreachable = () => new ApiError(`Can't reach your OS server at ${url}. Check that it's running.`, 0);
     // Reads give up quickly so an outage shows saved content. Writing a brief can legitimately take a while.
     const controller = new AbortController();
-    const timer = method === 'GET' ? setTimeout(() => controller.abort(), READ_TIMEOUT_MS) : null;
+    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
     try {
       response = await fetch(`${url}/api${path}`, {
         method,
@@ -139,6 +141,8 @@ export function createApi({ url, token }: Connection) {
 
   return {
     status: () => request<Status>('/status'),
+    /** A quick reachability check: gives up after `timeoutMs`, so a dead tunnel can't hold up the app. */
+    ping: (timeoutMs = PROBE_TIMEOUT_MS) => request<Status>('/status', 'GET', undefined, timeoutMs),
     saveComposioKey: (apiKey: string) => request('/credentials/composio', 'PUT', { apiKey }),
     saveOpenRouterKey: (apiKey: string) => request('/credentials/openrouter', 'PUT', { apiKey }),
     saveOllamaKey: (apiKey: string) => request('/credentials/ollama', 'PUT', { apiKey }),
@@ -155,6 +159,8 @@ export function createApi({ url, token }: Connection) {
     addUpdate: (text: string, meta?: { clientId: string; createdAt: string }) => request<LedgerEntry>('/ledger', 'POST', { text, ...meta }),
     briefs: () => request<{ briefs: Brief[] }>('/briefs'),
     generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }),
+    /** Writes today's first brief, unless one from today already exists, in which case the server returns that. */
+    generateTodayBrief: (kind: Kind) => request<Brief>('/briefs', 'POST', { kind, ifStale: true }),
     schedules: () => request<{ schedules: Schedule[] }>('/schedules'),
     createSchedule: (input: ScheduleInput) => request<Schedule>('/schedules', 'POST', input),
     updateSchedule: (id: number, input: ScheduleInput) => request<Schedule>(`/schedules/${id}`, 'PUT', input),

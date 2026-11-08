@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
 import type { Api, Brief, Kind, Source } from '../api';
 import { Markdown } from '../Markdown';
 import { useConnection } from '../offline';
+import { autoBriefFor, freshness } from '../staleBrief';
 import { parseBrief, type Goal, type GoalStatus, type NoiseItem, type Priority } from '../parseBrief';
 import { Button, ErrorNote, F, Loading, message, Screen, useColors, type Colors } from '../ui';
 
@@ -268,6 +269,19 @@ function FrontPage({ brief, wide }: { brief: Brief; wide: boolean }) {
   );
 }
 
+/** Shown above a brief from an earlier day: either today's is being written, or it can't be yet. */
+function StaleNote({ brief, generating }: { brief: Brief; generating: boolean }) {
+  const c = useColors();
+  const text = generating
+    ? `Writing today's brief… Showing ${shortDate(brief.createdAt)} until it's ready.`
+    : `Outdated: this brief is from ${shortDate(brief.createdAt)}. Today's is written once your Mac is reachable.`;
+  return (
+    <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderLeftWidth: 3, borderColor: generating ? c.accent : c.danger, paddingLeft: 12, paddingVertical: 6 }}>
+      <Text style={{ flex: 1, color: c.text, fontFamily: F.sansMedium, fontSize: 14, lineHeight: 20 }}>{text}</Text>
+    </View>
+  );
+}
+
 export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSchedules: boolean; onSchedule(): void }) {
   const c = useColors();
   const { width } = useWindowDimensions();
@@ -277,6 +291,8 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
   const [busy, setBusy] = useState<Kind | 'refresh' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { online, refreshKey } = useConnection();
+  const auto = useMemo(() => autoBriefFor(api), [api]);
+  const [generating, setGenerating] = useState(() => auto.pending() !== null);
 
   const load = useCallback(async () => {
     try {
@@ -290,6 +306,30 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
+
+  // The newest brief is from an earlier day: ask for today's, once. The guard lives outside this
+  // screen, so re-renders, tab switches and reopening the app join the same request.
+  useEffect(() => {
+    if (!briefs) return;
+    const request = auto.maybeGenerate(briefs[0], online);
+    if (!request) {
+      setGenerating(false);
+      return;
+    }
+    let live = true;
+    setGenerating(true);
+    request
+      .then((brief) => {
+        if (!live) return;
+        setBriefs((list) => [brief, ...(list ?? []).filter((b) => b.id !== brief.id)]);
+        setOpenId(null);
+      })
+      .catch((e) => live && setError(message(e)))
+      .finally(() => live && setGenerating(false));
+    return () => {
+      live = false;
+    };
+  }, [auto, briefs, online]);
 
   const generate = async (kind: Kind, refresh = false) => {
     setBusy(refresh ? 'refresh' : kind);
@@ -311,9 +351,12 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
 
   const current = briefs.find((b) => b.id === openId) ?? briefs[0];
   const earlier = briefs.filter((b) => b.id !== current?.id);
+  const latest = briefs[0];
+  const stale = current === latest && freshness(latest, online, new Date()).startsWith('stale');
 
   return (
     <Screen maxWidth={PAGE_WIDTH}>
+      {stale && latest ? <StaleNote brief={latest} generating={generating && online} /> : null}
       {current ? <FrontPage brief={current} wide={wide} /> : <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 18 }}>No briefs yet. Write your first one below.</Text>}
 
       {!hasSchedules ? (
@@ -330,9 +373,9 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
         <Rule heavy />
         <SectionTitle>New brief</SectionTitle>
         <View style={{ flexDirection: wide ? 'row' : 'column', gap: 10 }}>
-          <View style={wide ? { flex: 1 } : null}><Button label="New morning brief" variant="secondary" busy={busy === 'morning'} disabled={busy !== null || !online} onPress={() => void generate('morning')} /></View>
-          <View style={wide ? { flex: 1 } : null}><Button label="New evening brief" variant="secondary" busy={busy === 'evening'} disabled={busy !== null || !online} onPress={() => void generate('evening')} /></View>
-          <View style={wide ? { flex: 1 } : null}><Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || !online} onPress={() => void generate('morning', true)} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="New morning brief" variant="secondary" busy={busy === 'morning'} disabled={busy !== null || generating || !online} onPress={() => void generate('morning')} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="New evening brief" variant="secondary" busy={busy === 'evening'} disabled={busy !== null || generating || !online} onPress={() => void generate('evening')} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || generating || !online} onPress={() => void generate('morning', true)} /></View>
         </View>
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>
           {online ? 'OS reads each tool once a day and reuses that data, which keeps API use low. Refetch is for when something just changed.' : 'Your Mac writes new briefs, so these need a connection to it.'}

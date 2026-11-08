@@ -11,6 +11,6 @@
     "dev:fake": "npm --prefix server run dev:fake",
     "dev:app": "npm --prefix app start",
     "typecheck": "npm --prefix server run typecheck && npm --prefix app run typecheck",
-    "test": "npm --prefix server test"
+    "test": "npm --prefix server test && npm --prefix app test"
   }
 }

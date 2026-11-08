@@ -20,6 +20,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.3.0",
+    "tsx": "^4.23.15",
     "typescript": "~6.0.3"
   },
   "scripts": {
@@ -28,7 +29,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "build:web": "expo export --platform web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts"
   },
   "private": true
 }

@@ -324,7 +324,12 @@ export function createApp(deps: AppDeps) {
     return c.json(brief);
   });
   app.post('/api/briefs', async (c) => {
-    const { kind, refresh } = await parse(c, z.object({ kind: Kind, refresh: z.boolean().default(false) }));
+    const { kind, refresh, ifStale } = await parse(c, z.object({ kind: Kind, refresh: z.boolean().default(false), ifStale: z.boolean().default(false) }));
+    if (ifStale) {
+      // The app asks for this on its own when the newest brief is from an earlier day. Same pull budget as any brief.
+      const { brief, created } = await briefs.generateIfStale({ kind, trigger: 'manual' });
+      return c.json(brief, created ? 201 : 200);
+    }
     return c.json(await briefs.generate({ kind, trigger: 'manual', refresh }), 201);
   });
 

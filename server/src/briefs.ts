@@ -43,6 +43,28 @@ export class BriefService {
     return run;
   }
 
+  /**
+   * Writes a brief only if none exists yet for today in the user's timezone; otherwise returns today's.
+   * It waits in the same queue, so two apps opening at once get one brief and one set of pulls.
+   */
+  generateIfStale(options: GenerateOptions): Promise<{ brief: Brief; created: boolean }> {
+    const run = this.queue.then(async () => {
+      const today = this.todaysBrief(options.timezone);
+      return today ? { brief: today, created: false } : { brief: await this.run(options), created: true };
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private todaysBrief(timezone?: string): Brief | null {
+    const { store } = this.deps;
+    const latest = store.latestBrief();
+    if (!latest) return null;
+    const zone = timezone ?? store.getSetting('timezone') ?? 'UTC';
+    const now = this.deps.now?.() ?? new Date();
+    return localDate(new Date(latest.createdAt), zone) === localDate(now, zone) ? latest : null;
+  }
+
   private async run({ kind, trigger, timezone, refresh }: GenerateOptions): Promise<Brief> {
     const { store } = this.deps;
     const now = this.deps.now?.() ?? new Date();
@@ -95,7 +117,7 @@ export class BriefService {
 
     const table = renderSources(sources);
     const markdown = redact(body.includes(SOURCES_MARKER) ? body.replace(SOURCES_MARKER, () => table) : `${body}\n\n### Sources\n${table}`);
-    return store.addBrief({ kind, trigger, generator, markdown, sources });
+    return store.addBrief({ kind, trigger, generator, markdown, sources }, now);
   }
 
   /** The skill's budget: one live pull per toolkit per day, evenings never pull, a 429 stops that toolkit for the day. */

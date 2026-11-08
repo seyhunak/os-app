@@ -144,8 +144,8 @@ export class Store {
     this.db.prepare('DELETE FROM pulls WHERE date < ?').run(cutoff);
   }
 
-  addBrief(brief: Omit<Brief, 'id' | 'createdAt'>): Brief {
-    const createdAt = new Date().toISOString();
+  addBrief(brief: Omit<Brief, 'id' | 'createdAt'>, now = new Date()): Brief {
+    const createdAt = now.toISOString();
     const result = this.db.prepare('INSERT INTO briefs (kind, trigger, generator, markdown, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)')
       .run(brief.kind, brief.trigger, brief.generator, brief.markdown, JSON.stringify(brief.sources), createdAt);
     return { ...brief, id: Number(result.lastInsertRowid), createdAt };

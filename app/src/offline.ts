@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext } from 'react';
 import { AppState, Platform } from 'react-native';
-import { ApiError, createApi, type LedgerEntry } from './api';
+import { ApiError, createApi, PROBE_TIMEOUT_MS, type LedgerEntry } from './api';
+import { probe } from './connectivity';
 import type { Connection } from './storage';
 
 const OFFLINE_CHECK_MS = 10_000;
@@ -63,8 +64,17 @@ export function createOfflineApi(connection: Connection) {
     if (online) void sync(true);
   };
 
-  /** Fetches and saves a copy, or returns the saved copy if the server is out of reach. */
+  /**
+   * Fetches and saves a copy, or returns the saved copy if the server is out of reach.
+   * Waits for the startup check first, and while offline goes straight to the saved copy,
+   * so a dead tunnel costs at most the 3 second check instead of a 10 second read per screen.
+   */
   async function read<T>(name: string, fetcher: () => Promise<T>): Promise<T> {
+    await ready();
+    if (!state.online) {
+      const saved = await load<T>(`${prefix}:${name}`);
+      if (saved !== undefined) return saved;
+    }
     try {
       const value = await fetcher();
       await save(`${prefix}:${name}`, value);
@@ -120,6 +130,8 @@ export function createOfflineApi(connection: Connection) {
   }
 
   async function runSync(reconnected: boolean) {
+    // Reads would only return the saved copy, so there's nothing to sync until the server is back.
+    if (!state.online) return;
     update({ syncing: true });
     try {
       await flush();
@@ -147,16 +159,15 @@ export function createOfflineApi(connection: Connection) {
     return syncInFlight;
   }
 
-  /** Looks for the server at its saved address. */
+  /** Looks for the server at its saved address, giving up after 3 seconds. */
   const check = async () => {
     lastCheck = Date.now();
-    try {
-      await api.status();
-      setOnline(true);
-    } catch (error) {
-      if (isOffline(error)) setOnline(false);
-    }
+    setOnline(await probe(() => api.ping(PROBE_TIMEOUT_MS), PROBE_TIMEOUT_MS));
   };
+
+  /** The first check, shared by every read made while the app opens. */
+  let startupCheck: Promise<void> | null = null;
+  const ready = () => (startupCheck ??= check());
 
   return {
     ...api,
@@ -208,9 +219,10 @@ export function createOfflineApi(connection: Connection) {
 
     /** Keeps looking for the server, and stays up to date while it's reachable. Returns a stop function. */
     start: () => {
-      void Promise.all([load<string>(keys.savedAt), countPending()]).then(([savedAt]) => {
+      void Promise.all([load<string>(keys.savedAt), countPending(), ready()]).then(([savedAt]) => {
         if (savedAt) update({ savedAt });
-        void sync();
+        // Offline at startup: saved content is already showing, and the timer keeps checking.
+        if (state.online) void sync();
       });
       const timer = setInterval(() => {
         if (!state.online) void check();
@@ -218,10 +230,12 @@ export function createOfflineApi(connection: Connection) {
         // Notices a lost server soon, so the status shown in Settings stays true.
         else if (Date.now() - lastCheck > ONLINE_CHECK_MS) void check();
       }, OFFLINE_CHECK_MS);
+      // Back in the foreground: check again either way, since the tunnel may have come or gone meanwhile.
       const appState = AppState.addEventListener('change', (next) => {
         if (next !== 'active') return;
-        if (!state.online) void check();
-        else if (Date.now() - lastSync > RESUME_SYNC_MS) void sync();
+        void check().then(() => {
+          if (state.online && Date.now() - lastSync > RESUME_SYNC_MS) void sync();
+        });
       });
       const onNetwork = () => void check();
       if (Platform.OS === 'web') window.addEventListener('online', onNetwork);
