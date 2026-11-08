@@ -1,10 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext } from 'react';
 import { AppState, Platform } from 'react-native';
-import { ApiError, createApi, PROBE_TIMEOUT_MS, type Brief, type LedgerEntry } from './api';
+import { ApiError, createApi, PROBE_TIMEOUT_MS, type Brief, type Kind, type LedgerEntry, type Status } from './api';
+import { writeOfflineBrief, type BriefPrompt } from './offlineBrief';
 import { probe, withTimeout } from './connectivity';
 import { archivedIds, createOutbox, isOfflineError, newClientId, queueAndSend, SAVE_WAIT_MS, type Op } from './outbox';
-import type { Connection } from './storage';
+import { loadPhoneAiKey, type Connection } from './storage';
 
 const OFFLINE_CHECK_MS = 10_000;
 const ONLINE_CHECK_MS = 30_000;
@@ -52,7 +53,10 @@ export function createOfflineApi(connection: Connection) {
 
   const outbox = createOutbox({
     storage: { load: () => load(keys.outbox), save: (ops) => save(keys.outbox, ops) },
-    send: (op: Op) => (op.kind === 'update' ? api.addUpdate(op.text, { clientId: op.clientId, createdAt: op.createdAt }) : api.archiveBriefs(op.ids)),
+    send: (op: Op) =>
+      op.kind === 'update' ? api.addUpdate(op.text, { clientId: op.clientId, createdAt: op.createdAt })
+        : op.kind === 'brief' ? api.importBrief(op.draft)
+          : api.archiveBriefs(op.ids),
     onChange: () => void countPending(),
   });
   let lastSync = 0;
@@ -132,6 +136,8 @@ export function createOfflineApi(connection: Connection) {
         return { briefs: result.briefs.slice(0, SAVED_BRIEFS) };
       });
       await Promise.all([read('status', api.status), read('schedules', api.schedules), read('goals', api.goals), read('ledger', api.ledger)]);
+      // The rules for writing a brief offline. An older server doesn't have them, which is fine.
+      await read('prompt', api.briefPrompt).catch(() => undefined);
       const savedAt = new Date().toISOString();
       await save(keys.savedAt, savedAt);
       lastSync = Date.now();
@@ -168,9 +174,12 @@ export function createOfflineApi(connection: Connection) {
         const result = await api.briefs();
         return { briefs: result.briefs.slice(0, SAVED_BRIEFS) };
       });
+      const ops = await outbox.list();
       // Archived on this device but not on the server yet.
-      const hidden = archivedIds(await outbox.list());
-      return { briefs: briefs.filter((b) => !hidden.has(b.id)) };
+      const hidden = archivedIds(ops);
+      // Written on this device while offline, and not on the server yet.
+      const drafts: Brief[] = ops.flatMap((op) => (op.kind === 'brief' ? [{ ...op.draft, id: op.id, trigger: 'offline' as const, pending: true }] : []));
+      return { briefs: [...drafts, ...briefs.filter((b) => !hidden.has(b.id))].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)) };
     },
     schedules: () => read('schedules', api.schedules),
     toolkits: (fresh = false) => read('toolkits', () => api.toolkits(fresh)),
@@ -209,10 +218,52 @@ export function createOfflineApi(connection: Connection) {
 
     /** Hidden here at once, and archived on the server now or when it's back. Returns whether it's still queued. */
     archiveBriefs: async (ids: number[]): Promise<{ archived: number; queued: boolean }> => {
+      // A draft that never reached the server is simply dropped from the queue.
+      const drafts = ids.filter((id) => id < 0);
+      if (drafts.length) await outbox.remove((op) => op.kind === 'brief' && drafts.includes(op.id));
+      ids = ids.filter((id) => id > 0);
+      if (!ids.length) return { archived: drafts.length, queued: false };
       const saved = await load<{ briefs: Brief[] }>(`${prefix}:briefs`);
       if (saved) await save(`${prefix}:briefs`, { briefs: saved.briefs.filter((b) => !ids.includes(b.id)) });
       const queued = await queueAndSend(outbox, { kind: 'archive', clientId: newClientId(), ids }, state.online);
       return { archived: ids.length, queued };
+    },
+
+    /** Server briefs read your tools, so anything this device saved goes first, then the brief is written. */
+    generateBrief: async (kind: Kind, refresh = false) => {
+      await withTimeout(flush(), SAVE_WAIT_MS).catch(() => undefined);
+      return api.generateBrief(kind, refresh);
+    },
+    generateTodayBrief: async (kind: Kind) => {
+      await withTimeout(flush(), SAVE_WAIT_MS).catch(() => undefined);
+      return api.generateTodayBrief(kind);
+    },
+
+    /**
+     * Writes a brief on this device from what it has saved: goals, your updates (synced or not)
+     * and the last scan's summaries. No tools are read. It's queued and sent to the server when
+     * it's back, where it's stored as is, so no pull budget is spent.
+     */
+    writeOfflineBrief: async (kind: Kind): Promise<Brief> => {
+      const pendingGoals = await load<string>(keys.goals);
+      const goals = pendingGoals ?? (await load<{ goals: string }>(`${prefix}:goals`))?.goals ?? '';
+      const ledger = (await load<{ entries: LedgerEntry[] }>(`${prefix}:ledger`))?.entries ?? [];
+      const ops = await outbox.list();
+      const queued = ops.flatMap((op) => (op.kind === 'update' ? [{ text: op.text, createdAt: op.createdAt }] : []));
+      const updates = [...ledger, ...queued].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      const lastScan = (await load<{ briefs: Brief[] }>(`${prefix}:briefs`))?.briefs.find((b) => b.trigger !== 'offline');
+      const status = await load<Status>(`${prefix}:status`);
+      const now = new Date();
+      const result = await writeOfflineBrief({ kind, now, goals, updates, ...(lastScan ? { lastScan } : {}) }, {
+        prompt: await load<BriefPrompt>(`${prefix}:prompt`),
+        apiKey: await loadPhoneAiKey(),
+        model: status?.openrouterModel ?? status?.model ?? null,
+      });
+      const clientId = newClientId();
+      const id = -now.getTime();
+      const draft = { clientId, kind, generator: result.generator, markdown: result.markdown, sources: result.sources, createdAt: now.toISOString() };
+      const stillQueued = await queueAndSend(outbox, { kind: 'brief', clientId, id, draft }, state.online);
+      return { ...draft, id, trigger: 'offline', ...(stillQueued ? { pending: true } : {}) };
     },
 
     sync: () => check().then(() => sync()),

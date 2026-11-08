@@ -21,7 +21,8 @@ export interface SourceReport {
 export interface Brief {
   id: number;
   kind: Kind;
-  trigger: 'manual' | 'schedule';
+  /** 'offline' briefs were written on a phone while the server was out of reach, then synced. */
+  trigger: 'manual' | 'schedule' | 'offline';
   generator: 'ai' | 'digest';
   markdown: string;
   sources: SourceReport[];
@@ -85,6 +86,8 @@ export class Store {
   private migrateBriefs(): void {
     const columns = this.db.prepare('PRAGMA table_info(briefs)').all() as Row[];
     if (!columns.some((column) => column.name === 'archived_at')) this.db.exec('ALTER TABLE briefs ADD COLUMN archived_at TEXT');
+    if (!columns.some((column) => column.name === 'client_id')) this.db.exec('ALTER TABLE briefs ADD COLUMN client_id TEXT');
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS briefs_client_id ON briefs (client_id) WHERE client_id IS NOT NULL');
   }
 
   /** Existing databases get the column that lets a device safely retry sending an update. */
@@ -151,11 +154,18 @@ export class Store {
     this.db.prepare('DELETE FROM pulls WHERE date < ?').run(cutoff);
   }
 
-  addBrief(brief: Omit<Brief, 'id' | 'createdAt'>, now = new Date()): Brief {
+  addBrief(brief: Omit<Brief, 'id' | 'createdAt'>, now = new Date(), clientId?: string): Brief {
     const createdAt = now.toISOString();
-    const result = this.db.prepare('INSERT INTO briefs (kind, trigger, generator, markdown, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(brief.kind, brief.trigger, brief.generator, brief.markdown, JSON.stringify(brief.sources), createdAt);
+    const result = this.db.prepare('INSERT INTO briefs (kind, trigger, generator, markdown, sources, created_at, client_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(brief.kind, brief.trigger, brief.generator, brief.markdown, JSON.stringify(brief.sources), createdAt, clientId ?? null);
     return { ...brief, id: Number(result.lastInsertRowid), createdAt };
+  }
+
+  /** Saves a brief a phone wrote offline. Sending it again returns the one already saved. */
+  importBrief(clientId: string, brief: Omit<Brief, 'id' | 'createdAt' | 'trigger'>, createdAt: Date): { brief: Brief; created: boolean } {
+    const existing = this.db.prepare('SELECT * FROM briefs WHERE client_id = ?').get(clientId) as Row | undefined;
+    if (existing) return { brief: toBrief(existing), created: false };
+    return { brief: this.addBrief({ ...brief, trigger: 'offline' }, createdAt, clientId), created: true };
   }
 
   listBriefs(limit = 30): Brief[] {

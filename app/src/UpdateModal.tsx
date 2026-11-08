@@ -63,7 +63,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
                 style={{ minHeight: 110, borderWidth: 1, borderColor: c.line, borderRadius: 4, padding: 14, color: c.text, fontFamily: F.text, fontSize: 18, lineHeight: 26, textAlignVertical: 'top' }}
               />
               {saved ? (
-                <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>{saved === 'device' ? (online ? 'Saved on this device. Sending it to your Mac in the background.' : "Saved on this device. It'll sync when your Mac is back.") : 'Saved. Your next brief will use this.'}</Text>
+                <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>{saved === 'device' ? `Saved to your ledger. Your next brief will use this${online ? '' : ', even offline'}. It syncs to your Mac ${online ? 'in the background' : "when it's back"}.` : 'Saved to your ledger. Your next brief will use this.'}</Text>
               ) : (
                 <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>Saved to your ledger. Every brief reads your updates from the last 14 days. Updates can't be edited later.</Text>
               )}
@@ -77,7 +77,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
                   <Text accessibilityRole="header" style={{ color: c.text, fontSize: 15, fontFamily: F.sansBold }}>Recent updates</Text>
                   {recent.map((entry) => (
                     <View key={entry.id} style={{ gap: 2 }}>
-                      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12 }}>{when(entry.createdAt)}{entry.pending ? ', waiting to sync' : ''}</Text>
+                      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12 }}>{when(entry.createdAt)}{entry.pending ? ', on this device' : ''}</Text>
                       <Text style={{ color: c.text, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>{entry.text}</Text>
                     </View>
                   ))}

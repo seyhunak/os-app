@@ -183,7 +183,9 @@ function Masthead({ brief, wide }: { brief: Brief; wide: boolean }) {
       </View>
       <Rule heavy />
       <Text style={{ ...small, color: c.muted, fontFamily: F.sans }}>
-        {brief.trigger === 'schedule' ? `Written on schedule at ${clock(brief.createdAt)}` : `Written at ${clock(brief.createdAt)}`}
+        {brief.trigger === 'offline'
+          ? `Offline draft, written on this device at ${clock(brief.createdAt)}${brief.pending ? '. Syncs to your Mac when it’s back.' : ''}`
+          : brief.trigger === 'schedule' ? `Written on schedule at ${clock(brief.createdAt)}` : `Written at ${clock(brief.createdAt)}`}
       </Text>
     </View>
   );
@@ -271,11 +273,12 @@ function FrontPage({ brief, wide }: { brief: Brief; wide: boolean }) {
 }
 
 /** Shown above a brief from an earlier day: either today's is being written, or it can't be yet. */
-function StaleNote({ brief, generating }: { brief: Brief; generating: boolean }) {
+function StaleNote({ brief, generating, online }: { brief: Brief; generating: boolean; online: boolean }) {
   const c = useColors();
+  const showing = brief.trigger === 'offline' ? 'your offline draft' : shortDate(brief.createdAt);
   const text = generating
-    ? `Writing today's brief… Showing ${shortDate(brief.createdAt)} until it's ready.`
-    : `Outdated: this brief is from ${shortDate(brief.createdAt)}. Today's is written once your Mac is reachable.`;
+    ? online ? `Writing today's brief with fresh tool data… Showing ${showing} until it's ready.` : `Writing today's draft on this device… Showing ${showing} until it's ready.`
+    : `Outdated: this brief is from ${shortDate(brief.createdAt)}. Write a new one below.`;
   return (
     <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderLeftWidth: 3, borderColor: generating ? c.accent : c.danger, paddingLeft: 12, paddingVertical: 6 }}>
       <Text style={{ flex: 1, color: c.text, fontFamily: F.sansMedium, fontSize: 14, lineHeight: 20 }}>{text}</Text>
@@ -312,7 +315,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
   // screen, so re-renders, tab switches and reopening the app join the same request.
   useEffect(() => {
     if (!briefs) return;
-    const request = auto.maybeGenerate(briefs[0], online);
+    const request = auto.maybeGenerate(briefs, online);
     if (!request) {
       setGenerating(false);
       return;
@@ -350,7 +353,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
     setBusy(refresh ? 'refresh' : kind);
     setError(null);
     try {
-      const brief = await api.generateBrief(kind, refresh);
+      const brief = online ? await api.generateBrief(kind, refresh) : await api.writeOfflineBrief(kind);
       setBriefs((list) => [brief, ...(list ?? [])]);
       setOpenId(brief.id);
     } catch (e) {
@@ -367,11 +370,11 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
   const current = briefs.find((b) => b.id === openId) ?? briefs[0];
   const earlier = briefs.filter((b) => b.id !== current?.id);
   const latest = briefs[0];
-  const stale = current === latest && freshness(latest, online, new Date()).startsWith('stale');
+  const stale = current === latest && freshness(briefs, online, new Date()).startsWith('stale');
 
   return (
     <Screen maxWidth={PAGE_WIDTH}>
-      {stale && latest ? <StaleNote brief={latest} generating={generating && online} /> : null}
+      {stale && latest ? <StaleNote brief={latest} generating={generating} online={online} /> : null}
       {current ? <FrontPage brief={current} wide={wide} /> : <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 18 }}>No briefs yet. Write your first one below.</Text>}
 
       {!hasSchedules ? (
@@ -388,12 +391,12 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
         <Rule heavy />
         <SectionTitle>New brief</SectionTitle>
         <View style={{ flexDirection: wide ? 'row' : 'column', gap: 10 }}>
-          <View style={wide ? { flex: 1 } : null}><Button label="New morning brief" variant="secondary" busy={busy === 'morning'} disabled={busy !== null || generating || !online} onPress={() => void generate('morning')} /></View>
-          <View style={wide ? { flex: 1 } : null}><Button label="New evening brief" variant="secondary" busy={busy === 'evening'} disabled={busy !== null || generating || !online} onPress={() => void generate('evening')} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="New morning brief" variant="secondary" busy={busy === 'morning'} disabled={busy !== null || generating} onPress={() => void generate('morning')} /></View>
+          <View style={wide ? { flex: 1 } : null}><Button label="New evening brief" variant="secondary" busy={busy === 'evening'} disabled={busy !== null || generating} onPress={() => void generate('evening')} /></View>
           <View style={wide ? { flex: 1 } : null}><Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || generating || !online} onPress={() => void generate('morning', true)} /></View>
         </View>
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>
-          {online ? 'OS reads each tool once a day and reuses that data, which keeps API use low. Refetch is for when something just changed.' : 'Your Mac writes new briefs, so these need a connection to it.'}
+          {online ? 'OS reads each tool once a day and reuses that data, which keeps API use low. Refetch is for when something just changed.' : 'Offline, a brief is written on this device from your goals, your updates and the last scan, then synced to your Mac when it’s back. Refetch needs your Mac.'}
         </Text>
       </View>
 

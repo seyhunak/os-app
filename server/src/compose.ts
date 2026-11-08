@@ -102,6 +102,12 @@ const STRUCTURE: Record<Kind, string> = {
   evening: template('Good evening', 'Which goal moved today, or that none did, and the one thing to start with tomorrow.', 'What mattered today and how each one ended, based only on the evidence.', 'One or two lines: what to start with tomorrow, with a carry or drop decision for anything unfinished.'),
 };
 
+/**
+ * The rules and layout, for a phone that writes a brief itself while the server is out of reach.
+ * It caches these, so offline briefs follow the same rules without a second copy to keep in step.
+ */
+export const briefPrompt = () => ({ system: { morning: `${SHARED_RULES}\n\n${STRUCTURE.morning}`, evening: `${SHARED_RULES}\n\n${STRUCTURE.evening}` }, maxTokens: MAX_OUTPUT_TOKENS, sourcesMarker: SOURCES_MARKER });
+
 const escapeTags = (text: string) => text.replaceAll('<', '\\u003c').replaceAll('>', '\\u003e');
 
 /** Stops text from closing its tag and escaping into the instructions. */

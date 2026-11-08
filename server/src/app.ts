@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { BriefService, selectedToolkits } from './briefs.ts';
 import { TOOLKITS, toolkitBySlug } from './collectors.ts';
 import type { ComposioGateway, ConnectedAccount } from './composio.ts';
-import { createComposer, DEFAULT_MODEL, DEFAULT_OLLAMA_URL, describeComposeError, listOllamaModels, listOpenRouterModels, OllamaError, type AiConfig, type Composer, type ModelOption, type Provider } from './compose.ts';
+import { briefPrompt, createComposer, DEFAULT_MODEL, DEFAULT_OLLAMA_URL, describeComposeError, listOllamaModels, listOpenRouterModels, OllamaError, type AiConfig, type Composer, type ModelOption, type Provider } from './compose.ts';
 import type { Schedule, Store } from './db.ts';
 import { redact } from './redact.ts';
 import { Scheduler } from './scheduler.ts';
@@ -324,6 +324,25 @@ export function createApp(deps: AppDeps) {
     return c.json(brief);
   });
   // Archiving, not deleting: the brief is hidden but kept. Sending it twice is harmless, so offline devices can retry.
+  app.get('/api/brief-prompt', (c) => c.json(briefPrompt()));
+  // A brief a phone wrote while offline. It's stored as is: no tools are read, so no pull budget is spent.
+  app.post('/api/briefs/import', async (c) => {
+    const body = await parse(c, z.object({
+      clientId: z.string().min(8).max(100),
+      kind: Kind,
+      generator: z.enum(['ai', 'digest']),
+      markdown: z.string().min(1).max(60_000),
+      sources: z.array(z.object({ toolkit: z.string().max(100), name: z.string().max(100), status: z.string().max(40), items: z.number().int().min(0), label: z.string().max(200).optional(), summary: z.string().max(2000).optional(), detail: z.string().max(500).optional() })).max(50),
+      createdAt: z.iso.datetime(),
+    }));
+    const { brief, created } = store.importBrief(body.clientId, {
+      kind: body.kind,
+      generator: body.generator,
+      markdown: redact(body.markdown),
+      sources: body.sources.map((s) => ({ ...s, status: 'cache' as const, ...(s.summary ? { summary: redact(s.summary) } : {}) })),
+    }, new Date(body.createdAt));
+    return c.json(brief, created ? 201 : 200);
+  });
   app.post('/api/briefs/archive', async (c) => {
     const { ids } = await parse(c, z.object({ ids: z.array(z.number().int().positive()).min(1).max(500) }));
     return c.json({ archived: store.archiveBriefs(ids) });

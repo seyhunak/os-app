@@ -1,10 +1,12 @@
-import { ApiError } from './api';
+import { ApiError, type BriefDraft } from './api';
 import { TimeoutError, withTimeout } from './connectivity';
 
 /** Changes made on this device, waiting to reach the server. */
 export type Op =
   | { kind: 'update'; clientId: string; text: string; createdAt: string }
-  | { kind: 'archive'; clientId: string; ids: number[] };
+  | { kind: 'archive'; clientId: string; ids: number[] }
+  /** A brief written offline. `id` is its temporary, negative id on this device. */
+  | { kind: 'brief'; clientId: string; id: number; draft: BriefDraft };
 
 /** Updates queued before ops had a kind. */
 type Stored = Op | { kind?: undefined; clientId: string; text: string; createdAt: string };
@@ -59,6 +61,8 @@ export function createOutbox({ storage, send, onChange }: { storage: OutboxStora
 
   return {
     list: read,
+    /** Drops changes that are no longer wanted, such as a draft deleted before it synced. */
+    remove: (match: (op: Op) => boolean) => change((ops) => ops.filter((op) => !match(op))),
     /** Adds a change. One already queued with the same client id isn't added twice. */
     add: (op: Op) => change((ops) => (ops.some((o) => o.clientId === op.clientId) ? ops : [...ops, op])),
     /** Sends everything queued. Calls made while a run is going join that run. */

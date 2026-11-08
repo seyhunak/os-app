@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Linking, Pressable, Text, View } from 'react-native';
+import { Linking, Platform, Pressable, Text, View } from 'react-native';
 import { composioState, modelState } from '../settingsSummary';
 import { COMPOSIO_URL, type Api, type ModelOption, type Provider, type Status } from '../api';
 import { useConnection, type OfflineApi } from '../offline';
-import { clearConnection, type Connection } from '../storage';
+import { clearConnection, clearPhoneAiKey, loadPhoneAiKey, savePhoneAiKey, type Connection } from '../storage';
 import { ToolList } from '../ToolList';
 import { Button, Card, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
 
@@ -53,6 +53,57 @@ function KeyRow({ name, label, state, hint, getKeyUrl, getKeyLabel, optional, on
           {state ? <Button label="Remove key" variant="danger" disabled={busy} onPress={() => void run(onRemove)} /> : null}
         </>
       )}
+    </Card>
+  );
+}
+
+/**
+ * An OpenRouter key kept only on this phone, so it can write a brief with AI while your Mac is out
+ * of reach. Your server's key never leaves the server. Without this, offline briefs are plain.
+ */
+function PhoneAiKey({ model }: { model: string | null }) {
+  const c = useColors();
+  const [hint, setHint] = useState<string | null | undefined>(undefined);
+  const [value, setValue] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    void loadPhoneAiKey().then((key) => setHint(key ? key.slice(-4) : null));
+  }, []);
+  if (Platform.OS === 'web' || hint === undefined) return null;
+
+  const run = async (work: () => Promise<void>, next: string | null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await work();
+      setHint(next);
+      setValue('');
+    } catch (e) {
+      setError(message(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <Text style={{ color: c.text, fontSize: 16, fontFamily: F.sansMedium }}>Offline writing on this phone</Text>
+      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>
+        When your Mac is out of reach, this phone writes the brief itself from your goals, updates and the last scan.
+        {model ? ` With an OpenRouter key here, it uses ${model}.` : ''} Without one, the brief is plain. The key stays in this phone’s secure storage and is sent only to OpenRouter.
+      </Text>
+      <Field
+        label="OpenRouter key for this phone"
+        value={value}
+        onChangeText={setValue}
+        secureTextEntry
+        placeholder={hint ? `${DOTS}${hint}` : 'Optional. Paste a key'}
+        {...(hint ? { placeholderTextColor: c.text } : {})}
+      />
+      <ErrorNote message={error} />
+      {value.trim() ? <Button label={hint ? 'Replace key' : 'Save key'} variant="secondary" busy={busy} disabled={value.trim().length < 8} onPress={() => void run(() => savePhoneAiKey(value.trim()), value.trim().slice(-4))} /> : null}
+      {hint ? <Button label="Remove key from this phone" variant="danger" disabled={busy} onPress={() => void run(clearPhoneAiKey, null)} /> : null}
     </Card>
   );
 }
@@ -361,7 +412,10 @@ export function SettingsScreen({ api, status, connection, onChanged, onSignOut }
       <Section title="Keys" collapsed={keys.configured} summary={keys.summary}>
         <KeyRow name="Composio" label="Composio API key" state={status.composio} hint={status.composioHint} getKeyUrl={COMPOSIO_URL} onSave={(k) => api.saveComposioKey(k).then(onChanged)} onRemove={() => api.removeCredential('composio').then(onChanged)} />
       </Section>
-      <Section title="Model" collapsed={model.configured} summary={model.summary}><ModelSection api={api} status={status} onChanged={onChanged} /></Section>
+      <Section title="Model" collapsed={model.configured} summary={model.summary}>
+        <ModelSection api={api} status={status} onChanged={onChanged} />
+        <PhoneAiKey model={status.openrouterModel ?? status.model ?? null} />
+      </Section>
       <Section title="Server">
         <ServerSection api={api} machine={status.machine} connection={connection} onSignOut={onSignOut} />
       </Section>

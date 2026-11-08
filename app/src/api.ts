@@ -1,4 +1,5 @@
 import type { Connection } from './storage';
+import type { BriefPrompt } from './offlineBrief';
 
 export type Kind = 'morning' | 'evening';
 
@@ -56,7 +57,10 @@ export interface Source {
 export interface Brief {
   id: number;
   kind: Kind;
-  trigger: 'manual' | 'schedule';
+  /** 'offline': written on a phone while the server was out of reach. */
+  trigger: 'manual' | 'schedule' | 'offline';
+  /** An offline draft that hasn't reached the server yet. */
+  pending?: boolean;
   generator: 'ai' | 'digest';
   markdown: string;
   sources: Source[];
@@ -81,6 +85,15 @@ export interface LedgerEntry {
   createdAt: string;
   /** Written while offline, and not on your server yet. */
   pending?: boolean;
+}
+
+export interface BriefDraft {
+  clientId: string;
+  kind: Kind;
+  generator: Brief['generator'];
+  markdown: string;
+  sources: Source[];
+  createdAt: string;
 }
 
 export type ScheduleInput = Pick<Schedule, 'kind' | 'time' | 'days' | 'timezone' | 'enabled'>;
@@ -160,6 +173,9 @@ export function createApi({ url, token }: Connection) {
     ledger: () => request<{ entries: LedgerEntry[] }>('/ledger'),
     addUpdate: (text: string, meta?: { clientId: string; createdAt: string }) => request<LedgerEntry>('/ledger', 'POST', { text, ...meta }, meta ? SEND_TIMEOUT_MS : 0),
     /** Hides briefs from every list. They stay in the server's database. */
+    briefPrompt: () => request<BriefPrompt>('/brief-prompt'),
+    /** Saves a brief written offline. The client id makes a resend return the one already saved. */
+    importBrief: (draft: BriefDraft) => request<Brief>('/briefs/import', 'POST', draft, SEND_TIMEOUT_MS),
     archiveBriefs: (ids: number[]) => request<{ archived: number }>('/briefs/archive', 'POST', { ids }, SEND_TIMEOUT_MS),
     briefs: () => request<{ briefs: Brief[] }>('/briefs'),
     generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }),

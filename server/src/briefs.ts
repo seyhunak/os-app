@@ -58,7 +58,8 @@ export class BriefService {
 
   private todaysBrief(timezone?: string): Brief | null {
     const { store } = this.deps;
-    const latest = store.latestBrief();
+    // A phone's offline draft never read your tools, so it doesn't count as today's brief.
+    const latest = store.listBriefs(30).find((b) => b.trigger !== 'offline');
     if (!latest) return null;
     const zone = timezone ?? store.getSetting('timezone') ?? 'UTC';
     const now = this.deps.now?.() ?? new Date();

@@ -286,6 +286,68 @@ describe('connections cache', () => {
   });
 });
 
+describe('briefs written offline on a phone', () => {
+  const draft = (over: Record<string, unknown> = {}) => ({
+    clientId: 'phone-1234-abcdef', kind: 'morning', generator: 'digest', markdown: '# Good morning\n### Signals\nFrom your phone.',
+    sources: [{ toolkit: 'gmail', name: 'Gmail', status: 'cache', items: 1, summary: 'One email from Pat.' }],
+    createdAt: NOW.toISOString(), ...over,
+  });
+
+  it('stores the draft as is, without reading any tool', async () => {
+    const { call, execute } = await connected();
+    const response = await call('/api/briefs/import', 'POST', draft());
+    expect(response.status).toBe(201);
+    const brief = await response.json();
+    expect(brief).toMatchObject({ trigger: 'offline', generator: 'digest', createdAt: NOW.toISOString() });
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('saves a resent draft only once', async () => {
+    const { call } = await connected();
+    const first = await (await call('/api/briefs/import', 'POST', draft())).json();
+    const again = await call('/api/briefs/import', 'POST', draft());
+    expect(again.status).toBe(200);
+    expect((await again.json()).id).toBe(first.id);
+    expect((await (await call('/api/briefs')).json()).briefs).toHaveLength(1);
+  });
+
+  it('redacts what it stores', async () => {
+    const { call } = await connected();
+    // Built at runtime, so the commit check doesn't mistake the fixture for a real key.
+    const fake = ['sk', 'or', 'v1', 'x'.repeat(30)].join('-');
+    const brief = await (await call('/api/briefs/import', 'POST', draft({ markdown: `Key ${fake}` }))).json();
+    expect(brief.markdown).not.toContain('sk-or-v1-abcdefghij');
+  });
+
+  it("doesn't count as today's brief, so back online the server reads tools once and keeps the draft", async () => {
+    const { call, execute } = await connected();
+    const imported = await (await call('/api/briefs/import', 'POST', draft())).json();
+    const first = await call('/api/briefs', 'POST', { kind: 'morning', ifStale: true });
+    expect(first.status).toBe(201);
+    expect(execute).toHaveBeenCalledTimes(1);
+    // A second phone, or a resent draft, spends nothing more today.
+    await call('/api/briefs/import', 'POST', draft());
+    expect((await call('/api/briefs', 'POST', { kind: 'morning', ifStale: true })).status).toBe(200);
+    expect(execute).toHaveBeenCalledTimes(1);
+    const ids = (await (await call('/api/briefs')).json()).briefs.map((b: { id: number }) => b.id);
+    expect(ids).toContain(imported.id);
+    expect(ids).toHaveLength(2);
+  });
+
+  it('rejects a draft without a client id', async () => {
+    const { call } = await connected();
+    expect((await call('/api/briefs/import', 'POST', draft({ clientId: '' }))).status).toBe(400);
+  });
+
+  it('hands out the brief rules for offline writing, without any key', async () => {
+    const { call } = await connected({ composer: async () => 'x' });
+    const body = await (await call('/api/brief-prompt')).json();
+    expect(body.system.morning).toContain('### Focus');
+    expect(body.system.evening).toContain('Good evening');
+    expect(JSON.stringify(body)).not.toContain('sk-or-test-key');
+  });
+});
+
 describe('archiving briefs', () => {
   it('hides one brief, keeps the rest, and can be sent again', async () => {
     const { call, store } = await connected();

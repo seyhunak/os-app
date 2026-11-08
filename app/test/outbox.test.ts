@@ -115,6 +115,31 @@ describe('outbox queue', () => {
     assert.deepEqual(await box.list(), []);
   });
 
+  it('replays an offline brief and an update in the order they were made, once each', async () => {
+    const storage = memory();
+    const srv = server();
+    const box = createOutbox({ storage, send: srv.send });
+    const draft = { clientId: 'brief-1', kind: 'morning' as const, generator: 'digest' as const, markdown: '# Good morning', sources: [], createdAt: '2026-11-08T08:00:00.000Z' };
+    await box.add(update('u1'));
+    await box.add({ kind: 'brief', clientId: 'brief-1', id: -5, draft });
+    await box.add({ kind: 'brief', clientId: 'brief-1', id: -5, draft });
+    assert.equal(await box.flush(), 'offline');
+    srv.setReachable(true);
+    await box.flush();
+    await box.flush();
+    assert.deepEqual(srv.sent.map((o) => `${o.kind}:${o.clientId}`), ['update:u1', 'brief:brief-1']);
+    assert.equal((srv.sent[0] as Extract<Op, { kind: 'update' }>).createdAt, '2026-11-08T10:00:00.000Z');
+  });
+
+  it('drops a draft deleted before it synced', async () => {
+    const box = createOutbox({ storage: memory(), send: async () => { throw offline(); } });
+    const draft = { clientId: 'b', kind: 'morning' as const, generator: 'digest' as const, markdown: 'x', sources: [], createdAt: '2026-11-08T08:00:00.000Z' };
+    await box.add({ kind: 'brief', clientId: 'b', id: -9, draft });
+    await box.add(update('u'));
+    await box.remove((op) => op.kind === 'brief' && op.id === -9);
+    assert.deepEqual((await box.list()).map((o) => o.clientId), ['u']);
+  });
+
   it('lists ids waiting to be archived', () => {
     assert.deepEqual([...archivedIds([update('a'), { kind: 'archive', clientId: 'b', ids: [1, 2] }, { kind: 'archive', clientId: 'c', ids: [5] }])], [1, 2, 5]);
   });
