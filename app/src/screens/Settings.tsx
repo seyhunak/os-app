@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
+import { composioState, modelState } from '../settingsSummary';
 import { COMPOSIO_URL, type Api, type ModelOption, type Provider, type Status } from '../api';
 import { useConnection, type OfflineApi } from '../offline';
 import { clearConnection, type Connection } from '../storage';
@@ -349,15 +350,18 @@ function GoalsSection({ api }: { api: Api }) {
 export function SettingsScreen({ api, status, connection, onChanged, onSignOut }: {
   api: OfflineApi; status: Status; connection: Connection; onChanged(): void; onSignOut(): void;
 }) {
+  // Set-up sections start collapsed to keep the page quiet. Anything missing starts open.
+  const keys = composioState(status);
+  const model = modelState(status);
   return (
     <Screen>
       <Title>Settings</Title>
       <GoalsSection api={api} />
       <Section title="Tools"><ToolList api={api} /></Section>
-      <Section title="Keys">
+      <Section title="Keys" collapsed={keys.configured} summary={keys.summary}>
         <KeyRow name="Composio" label="Composio API key" state={status.composio} hint={status.composioHint} getKeyUrl={COMPOSIO_URL} onSave={(k) => api.saveComposioKey(k).then(onChanged)} onRemove={() => api.removeCredential('composio').then(onChanged)} />
       </Section>
-      <Section title="Model"><ModelSection api={api} status={status} onChanged={onChanged} /></Section>
+      <Section title="Model" collapsed={model.configured} summary={model.summary}><ModelSection api={api} status={status} onChanged={onChanged} /></Section>
       <Section title="Server">
         <ServerSection api={api} machine={status.machine} connection={connection} onSignOut={onSignOut} />
       </Section>

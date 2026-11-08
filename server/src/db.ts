@@ -78,6 +78,13 @@ export class Store {
         timezone TEXT NOT NULL, enabled INTEGER NOT NULL, last_run_at TEXT, last_status TEXT);
     `);
     this.migrateLedger();
+    this.migrateBriefs();
+  }
+
+  /** Briefs are archived, never deleted: hidden from every list, but still in the database. */
+  private migrateBriefs(): void {
+    const columns = this.db.prepare('PRAGMA table_info(briefs)').all() as Row[];
+    if (!columns.some((column) => column.name === 'archived_at')) this.db.exec('ALTER TABLE briefs ADD COLUMN archived_at TEXT');
   }
 
   /** Existing databases get the column that lets a device safely retry sending an update. */
@@ -152,11 +159,17 @@ export class Store {
   }
 
   listBriefs(limit = 30): Brief[] {
-    return (this.db.prepare('SELECT * FROM briefs ORDER BY id DESC LIMIT ?').all(limit) as Row[]).map(toBrief);
+    return (this.db.prepare('SELECT * FROM briefs WHERE archived_at IS NULL ORDER BY id DESC LIMIT ?').all(limit) as Row[]).map(toBrief);
+  }
+
+  /** Hides these briefs. Unknown or already archived ids are skipped, so a device can safely send it again. */
+  archiveBriefs(ids: number[], now = new Date()): number {
+    const archive = this.db.prepare('UPDATE briefs SET archived_at = ? WHERE id = ? AND archived_at IS NULL');
+    return ids.reduce((count, id) => count + Number(archive.run(now.toISOString(), id).changes), 0);
   }
 
   getBrief(id: number): Brief | null {
-    const row = this.db.prepare('SELECT * FROM briefs WHERE id = ?').get(id) as Row | undefined;
+    const row = this.db.prepare('SELECT * FROM briefs WHERE id = ? AND archived_at IS NULL').get(id) as Row | undefined;
     return row ? toBrief(row) : null;
   }
 

@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createContext, useContext } from 'react';
 import { AppState, Platform } from 'react-native';
-import { ApiError, createApi, PROBE_TIMEOUT_MS, type LedgerEntry } from './api';
-import { probe } from './connectivity';
+import { ApiError, createApi, PROBE_TIMEOUT_MS, type Brief, type LedgerEntry } from './api';
+import { probe, withTimeout } from './connectivity';
+import { archivedIds, createOutbox, isOfflineError, newClientId, queueAndSend, SAVE_WAIT_MS, type Op } from './outbox';
 import type { Connection } from './storage';
 
 const OFFLINE_CHECK_MS = 10_000;
@@ -21,13 +22,7 @@ export interface ConnectionState {
   refreshKey: number;
 }
 
-interface QueuedUpdate {
-  clientId: string;
-  text: string;
-  createdAt: string;
-}
-
-const isOffline = (error: unknown) => error instanceof ApiError && error.status === 0;
+const isOffline = isOfflineError;
 
 /**
  * The server API, plus a copy on this device. Reads fall back to the copy when the server is
@@ -54,6 +49,12 @@ export function createOfflineApi(connection: Connection) {
 
   let syncInFlight: Promise<void> | null = null;
   let flushInFlight: Promise<void> | null = null;
+
+  const outbox = createOutbox({
+    storage: { load: () => load(keys.outbox), save: (ops) => save(keys.outbox, ops) },
+    send: (op: Op) => (op.kind === 'update' ? api.addUpdate(op.text, { clientId: op.clientId, createdAt: op.createdAt }) : api.archiveBriefs(op.ids)),
+    onChange: () => void countPending(),
+  });
   let lastSync = 0;
   let lastCheck = 0;
 
@@ -91,26 +92,16 @@ export function createOfflineApi(connection: Connection) {
   }
 
   const countPending = async () => {
-    const [outbox, goals] = await Promise.all([load<QueuedUpdate[]>(keys.outbox), load<string>(keys.goals)]);
-    update({ pending: (outbox?.length ?? 0) + (goals === undefined ? 0 : 1) });
+    const [ops, goals] = await Promise.all([outbox.list(), load<string>(keys.goals)]);
+    update({ pending: ops.length + (goals === undefined ? 0 : 1) });
   };
 
   /** Sends what's queued, oldest first. It stops at the first outage and tries again later. */
   function flush(): Promise<void> {
     flushInFlight ??= (async () => {
-      for (;;) {
-        const [next] = (await load<QueuedUpdate[]>(keys.outbox)) ?? [];
-        if (!next) break;
-        try {
-          await api.addUpdate(next.text, { clientId: next.clientId, createdAt: next.createdAt });
-        } catch (error) {
-          if (isOffline(error)) setOnline(false);
-          // Offline or signed out: keep it. Anything else the server has refused for good.
-          if (isOffline(error) || (error instanceof ApiError && error.status === 401)) return;
-        }
-        const rest = (await load<QueuedUpdate[]>(keys.outbox)) ?? [];
-        await save(keys.outbox, rest.filter((u) => u.clientId !== next.clientId));
-      }
+      const result = await outbox.flush();
+      if (result === 'offline') setOnline(false);
+      if (result !== 'sent') return;
       const goals = await load<string>(keys.goals);
       if (goals !== undefined) {
         try {
@@ -172,10 +163,15 @@ export function createOfflineApi(connection: Connection) {
   return {
     ...api,
     status: () => read('status', api.status),
-    briefs: () => read('briefs', async () => {
-      const result = await api.briefs();
-      return { briefs: result.briefs.slice(0, SAVED_BRIEFS) };
-    }),
+    briefs: async () => {
+      const { briefs } = await read('briefs', async () => {
+        const result = await api.briefs();
+        return { briefs: result.briefs.slice(0, SAVED_BRIEFS) };
+      });
+      // Archived on this device but not on the server yet.
+      const hidden = archivedIds(await outbox.list());
+      return { briefs: briefs.filter((b) => !hidden.has(b.id)) };
+    },
     schedules: () => read('schedules', api.schedules),
     toolkits: (fresh = false) => read('toolkits', () => api.toolkits(fresh)),
 
@@ -188,24 +184,35 @@ export function createOfflineApi(connection: Connection) {
     saveGoals: async (goals: string) => {
       await save(keys.goals, goals);
       await save(`${prefix}:goals`, { goals });
-      await flush();
+      const sending = flush();
+      if (state.online) await withTimeout(sending, SAVE_WAIT_MS).catch(() => undefined);
       return { goals };
     },
 
     ledger: async () => {
       const { entries } = await read('ledger', api.ledger);
-      const outbox = (await load<QueuedUpdate[]>(keys.outbox)) ?? [];
-      const waiting: LedgerEntry[] = outbox.map((u, i) => ({ id: -1 - i, text: u.text, createdAt: u.createdAt, pending: true }));
+      const ops = await outbox.list();
+      const sent = new Set(entries.map((e) => e.text + e.createdAt));
+      const waiting: LedgerEntry[] = ops.flatMap((op, i) =>
+        op.kind === 'update' && !sent.has(op.text + op.createdAt) ? [{ id: -1 - i, text: op.text, createdAt: op.createdAt, pending: true }] : []);
       return { entries: [...waiting.reverse(), ...entries] };
     },
-    /** Queued first, then sent. The id means a retry can't save it twice. */
+    /**
+     * Saved on the device first, then sent. It waits at most a few seconds for the server, and not
+     * at all while offline, so Save never hangs. The client id means a retry can't save it twice.
+     */
     addUpdate: async (text: string): Promise<LedgerEntry> => {
-      const entry: QueuedUpdate = { clientId: `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`, text, createdAt: new Date().toISOString() };
-      await save(keys.outbox, [...((await load<QueuedUpdate[]>(keys.outbox)) ?? []), entry]);
-      await countPending();
-      await flush();
-      const stillWaiting = ((await load<QueuedUpdate[]>(keys.outbox)) ?? []).some((u) => u.clientId === entry.clientId);
-      return { id: -Date.now(), text, createdAt: entry.createdAt, ...(stillWaiting ? { pending: true } : {}) };
+      const op: Op = { kind: 'update', clientId: newClientId(), text, createdAt: new Date().toISOString() };
+      const queued = await queueAndSend(outbox, op, state.online);
+      return { id: -Date.now(), text, createdAt: op.createdAt, ...(queued ? { pending: true } : {}) };
+    },
+
+    /** Hidden here at once, and archived on the server now or when it's back. Returns whether it's still queued. */
+    archiveBriefs: async (ids: number[]): Promise<{ archived: number; queued: boolean }> => {
+      const saved = await load<{ briefs: Brief[] }>(`${prefix}:briefs`);
+      if (saved) await save(`${prefix}:briefs`, { briefs: saved.briefs.filter((b) => !ids.includes(b.id)) });
+      const queued = await queueAndSend(outbox, { kind: 'archive', clientId: newClientId(), ids }, state.online);
+      return { archived: ids.length, queued };
     },
 
     sync: () => check().then(() => sync()),

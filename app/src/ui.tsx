@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, useColorScheme, View,
   type TextInputProps,
@@ -58,12 +58,38 @@ export function Body({ children, muted }: { children: ReactNode; muted?: boolean
   return <Text style={{ color: muted ? c.muted : c.text, fontFamily: F.text, fontSize: 18, lineHeight: 27 }}>{children}</Text>;
 }
 
-export function Section({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * A titled block. Pass `collapsed` to make it open and close, starting closed when true. The
+ * summary stays visible while it's closed, so a set-up section says what it's set to.
+ */
+export function Section({ title, children, collapsed, summary }: { title: string; children: ReactNode; collapsed?: boolean; summary?: string }) {
   const c = useColors();
+  const [open, setOpen] = useState(!collapsed);
+  const heading = <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 24, lineHeight: 30 }}>{title}</Text>;
+  if (collapsed === undefined) {
+    return (
+      <View style={{ gap: 10 }}>
+        {heading}
+        {children}
+      </View>
+    );
+  }
   return (
     <View style={{ gap: 10 }}>
-      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 24, lineHeight: 30 }}>{title}</Text>
-      {children}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`${title}${summary ? `, ${summary}` : ''}`}
+        accessibilityState={{ expanded: open }}
+        onPress={() => setOpen((o) => !o)}
+        style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+      >
+        {heading}
+        <View style={{ flexShrink: 1, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          {summary && !open ? <Text numberOfLines={1} style={{ flexShrink: 1, color: c.muted, fontFamily: F.sans, fontSize: 14 }}>{summary}</Text> : null}
+          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 14 }}>{open ? 'Collapse' : 'Expand'}</Text>
+        </View>
+      </Pressable>
+      {open ? children : null}
     </View>
   );
 }

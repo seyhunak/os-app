@@ -323,6 +323,12 @@ export function createApp(deps: AppDeps) {
     if (!brief) throw new HttpError(404, 'Brief not found');
     return c.json(brief);
   });
+  // Archiving, not deleting: the brief is hidden but kept. Sending it twice is harmless, so offline devices can retry.
+  app.post('/api/briefs/archive', async (c) => {
+    const { ids } = await parse(c, z.object({ ids: z.array(z.number().int().positive()).min(1).max(500) }));
+    return c.json({ archived: store.archiveBriefs(ids) });
+  });
+  app.delete('/api/briefs/:id{[0-9]+}', (c) => c.json({ archived: store.archiveBriefs([Number(c.req.param('id'))]) }));
   app.post('/api/briefs', async (c) => {
     const { kind, refresh, ifStale } = await parse(c, z.object({ kind: Kind, refresh: z.boolean().default(false), ifStale: z.boolean().default(false) }));
     if (ifStale) {

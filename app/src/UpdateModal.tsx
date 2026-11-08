@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Api, LedgerEntry } from './api';
+import { useConnection } from './offline';
 import { Button, ErrorNote, message, useColors, F } from './ui';
 
 const MAX_LENGTH = 1000;
@@ -13,6 +14,7 @@ const when = (iso: string) => new Date(iso).toLocaleString(undefined, { weekday:
 export function UpdateModal({ api, visible, onClose }: { api: Api; visible: boolean; onClose(): void }) {
   const c = useColors();
   const insets = useSafeAreaInsets();
+  const { online } = useConnection();
   const [text, setText] = useState('');
   const [recent, setRecent] = useState<LedgerEntry[]>([]);
   const [busy, setBusy] = useState(false);
@@ -61,7 +63,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
                 style={{ minHeight: 110, borderWidth: 1, borderColor: c.line, borderRadius: 4, padding: 14, color: c.text, fontFamily: F.text, fontSize: 18, lineHeight: 26, textAlignVertical: 'top' }}
               />
               {saved ? (
-                <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>{saved === 'device' ? "Saved on this device. It'll sync when your Mac is back." : 'Saved. Your next brief will use this.'}</Text>
+                <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>{saved === 'device' ? (online ? 'Saved on this device. Sending it to your Mac in the background.' : "Saved on this device. It'll sync when your Mac is back.") : 'Saved. Your next brief will use this.'}</Text>
               ) : (
                 <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>Saved to your ledger. Every brief reads your updates from the last 14 days. Updates can't be edited later.</Text>
               )}

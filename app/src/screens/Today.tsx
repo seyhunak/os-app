@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { Pressable, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
 import type { Api, Brief, Kind, Source } from '../api';
 import { Markdown } from '../Markdown';
-import { useConnection } from '../offline';
+import { SwipeRow } from '../SwipeRow';
+import { useConnection, type OfflineApi } from '../offline';
 import { autoBriefFor, freshness } from '../staleBrief';
 import { parseBrief, type Goal, type GoalStatus, type NoiseItem, type Priority } from '../parseBrief';
 import { Button, ErrorNote, F, Loading, message, Screen, useColors, type Colors } from '../ui';
@@ -282,7 +283,7 @@ function StaleNote({ brief, generating }: { brief: Brief; generating: boolean })
   );
 }
 
-export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSchedules: boolean; onSchedule(): void }) {
+export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi; hasSchedules: boolean; onSchedule(): void }) {
   const c = useColors();
   const { width } = useWindowDimensions();
   const wide = width >= TWO_COLUMNS_AT;
@@ -330,6 +331,20 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
       live = false;
     };
   }, [auto, briefs, online]);
+
+  const [confirmAll, setConfirmAll] = useState(false);
+  /** Hidden at once. The server archives them now, or when it's back if this device is offline. */
+  const archive = async (ids: number[]) => {
+    setConfirmAll(false);
+    setBriefs((list) => (list ?? []).filter((b) => !ids.includes(b.id)));
+    setOpenId((id) => (id !== null && ids.includes(id) ? null : id));
+    try {
+      await api.archiveBriefs(ids);
+    } catch (e) {
+      setError(message(e));
+      void load();
+    }
+  };
 
   const generate = async (kind: Kind, refresh = false) => {
     setBusy(refresh ? 'refresh' : kind);
@@ -384,12 +399,34 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
 
       {earlier.length ? (
         <View style={{ gap: 4 }}>
-          <SectionTitle>Earlier editions</SectionTitle>
-          {earlier.map((b) => (
-            <Pressable key={b.id} accessibilityRole="button" onPress={() => setOpenId(b.id)} style={{ minHeight: 44, justifyContent: 'center', borderTopWidth: 1, borderColor: c.line }}>
-              <Text style={{ color: c.text, fontFamily: F.text, fontSize: 17 }}>{edition(b.kind)}, {shortDate(b.createdAt)}, {clock(b.createdAt)}</Text>
-            </Pressable>
-          ))}
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <SectionTitle>Earlier editions</SectionTitle>
+            {!confirmAll ? (
+              <Pressable accessibilityRole="button" accessibilityLabel={`Delete all ${earlier.length} earlier editions`} onPress={() => setConfirmAll(true)} style={{ minHeight: 44, justifyContent: 'center' }}>
+                <Text style={{ color: c.danger, fontFamily: F.sansMedium, fontSize: 14 }}>Delete all</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {confirmAll ? (
+            <View accessibilityLiveRegion="polite" style={{ gap: 8, paddingBottom: 8 }}>
+              <Text style={{ color: c.text, fontFamily: F.sans, fontSize: 15, lineHeight: 21 }}>
+                Delete {earlier.length === 1 ? 'this earlier edition' : `all ${earlier.length} earlier editions`}? The brief you're reading stays. They're archived on your server, not erased.
+              </Text>
+              <View style={{ flexDirection: 'row', gap: 10 }}>
+                <View style={{ flex: 1 }}><Button label="Delete all" variant="danger" onPress={() => void archive(earlier.map((b) => b.id))} /></View>
+                <View style={{ flex: 1 }}><Button label="Cancel" variant="secondary" onPress={() => setConfirmAll(false)} /></View>
+              </View>
+            </View>
+          ) : null}
+          {earlier.map((b) => {
+            const label = `${edition(b.kind)}, ${shortDate(b.createdAt)}, ${clock(b.createdAt)}`;
+            return (
+              <SwipeRow key={b.id} label={label} onPress={() => setOpenId(b.id)} onDelete={() => void archive([b.id])}>
+                <Text style={{ color: c.text, fontFamily: F.text, fontSize: 17 }}>{label}</Text>
+              </SwipeRow>
+            );
+          })}
+          <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19, paddingTop: 4 }}>Swipe an edition left to delete it.</Text>
         </View>
       ) : null}
     </Screen>

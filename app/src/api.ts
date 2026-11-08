@@ -111,6 +111,8 @@ export function normalizeServerUrl(input: string): string {
 const READ_TIMEOUT_MS = 10_000;
 /** How long the app waits for your Mac before showing saved content instead. */
 export const PROBE_TIMEOUT_MS = 3_000;
+/** Queued changes are safe to resend, so their sends give up rather than hang on a dead tunnel. */
+export const SEND_TIMEOUT_MS = 8_000;
 
 export function createApi({ url, token }: Connection) {
   async function request<T>(path: string, method = 'GET', body?: unknown, timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : 0): Promise<T> {
@@ -153,10 +155,12 @@ export function createApi({ url, token }: Connection) {
     selectToolkits: (slugs: string[]) => request('/toolkits/selection', 'PUT', { slugs }),
     connectToolkit: (slug: string) => request<{ redirectUrl: string | null }>(`/toolkits/${slug}/connect`, 'POST'),
     goals: () => request<{ goals: string }>('/goals'),
-    saveGoals: (goals: string) => request('/goals', 'PUT', { goals }),
+    saveGoals: (goals: string) => request('/goals', 'PUT', { goals }, SEND_TIMEOUT_MS),
     saveTimezone: (timezone: string) => request('/settings/timezone', 'PUT', { timezone }),
     ledger: () => request<{ entries: LedgerEntry[] }>('/ledger'),
-    addUpdate: (text: string, meta?: { clientId: string; createdAt: string }) => request<LedgerEntry>('/ledger', 'POST', { text, ...meta }),
+    addUpdate: (text: string, meta?: { clientId: string; createdAt: string }) => request<LedgerEntry>('/ledger', 'POST', { text, ...meta }, meta ? SEND_TIMEOUT_MS : 0),
+    /** Hides briefs from every list. They stay in the server's database. */
+    archiveBriefs: (ids: number[]) => request<{ archived: number }>('/briefs/archive', 'POST', { ids }, SEND_TIMEOUT_MS),
     briefs: () => request<{ briefs: Brief[] }>('/briefs'),
     generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }),
     /** Writes today's first brief, unless one from today already exists, in which case the server returns that. */

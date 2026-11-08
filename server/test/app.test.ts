@@ -286,6 +286,35 @@ describe('connections cache', () => {
   });
 });
 
+describe('archiving briefs', () => {
+  it('hides one brief, keeps the rest, and can be sent again', async () => {
+    const { call, store } = await connected();
+    const a = await (await call('/api/briefs', 'POST', { kind: 'morning' })).json();
+    const b = await (await call('/api/briefs', 'POST', { kind: 'evening' })).json();
+    expect(await (await call(`/api/briefs/${a.id}`, 'DELETE')).json()).toEqual({ archived: 1 });
+    expect(await (await call(`/api/briefs/${a.id}`, 'DELETE')).json()).toEqual({ archived: 0 });
+    const { briefs } = await (await call('/api/briefs')).json();
+    expect(briefs.map((x: { id: number }) => x.id)).toEqual([b.id]);
+    expect((await call(`/api/briefs/${a.id}`)).status).toBe(404);
+    // Kept in the database, only hidden.
+    expect(store.archiveBriefs([a.id])).toBe(0);
+  });
+
+  it('archives several at once and skips unknown ids', async () => {
+    const { call } = await connected();
+    const ids: number[] = [];
+    for (let i = 0; i < 3; i++) ids.push((await (await call('/api/briefs', 'POST', { kind: 'evening' })).json()).id);
+    const result = await (await call('/api/briefs/archive', 'POST', { ids: [ids[0], ids[1], 9999] })).json();
+    expect(result).toEqual({ archived: 2 });
+    expect((await (await call('/api/briefs')).json()).briefs).toHaveLength(1);
+  });
+
+  it('rejects an empty list', async () => {
+    const { call } = await connected();
+    expect((await call('/api/briefs/archive', 'POST', { ids: [] })).status).toBe(400);
+  });
+});
+
 describe('pull budget', () => {
   it('pulls once a day, then reads the cache', async () => {
     const { call, execute } = await connected();
