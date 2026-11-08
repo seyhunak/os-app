@@ -13,6 +13,24 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
+## Architecture
+
+```
+ iPhone / Android / browser                 Your Mac (always on)
+┌──────────────────────────┐   Tailscale   ┌──────────────────────────────────────┐
+│ Expo app (app/)          │  HTTPS :8443  │ tailscale serve  →  127.0.0.1:8787   │
+│ - saved copy of briefs,  │ ────────────▶ │ Hono server (server/)                │
+│   ledger, goals          │  Bearer token │ - SQLite: briefs, ledger, pull cache │
+│ - offline queue          │               │ - scheduler (morning / evening)      │
+└──────────────────────────┘               │ - Composio  → your tools (read-only) │
+                                           │ - OpenRouter or Ollama → the brief   │
+                                           └──────────────────────────────────────┘
+```
+
+- **Server** (`server/`): a single Node process that listens on `127.0.0.1` only. It holds your keys, reads your tools through Composio, writes briefs with OpenRouter or Ollama, and serves the web app. On a Mac it runs as a launch agent, so it starts at login and restarts if it stops.
+- **Tailscale** puts the server on a private HTTPS address, `https://<machine>.<tailnet>.ts.net:8443`, that only your own devices can reach, on any network.
+- **Client** (`app/`): one Expo codebase for iOS, Android and web. It talks to the server with a token and keeps a copy of what it last read, so it still works when the Mac is asleep.
+
 ## How it works
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
@@ -100,6 +118,14 @@ Use `npx expo run:android` for Android. In the app, enter your server's address 
 - **Sent to Composio.** Your tool requests go through Composio, under your own account.
 - **Redacted.** Meeting links, passcodes and common token formats are removed before anything is stored or sent.
 
+## Today's brief, automatically
+
+If the newest brief on the Today screen is from yesterday or earlier, in your phone's local time, the app asks the server for today's morning brief on its own. You keep reading the old one, marked "Writing today's brief…", until the new one arrives.
+
+- **Same budget as any brief.** The app sends `POST /api/briefs` with `ifStale: true`. The server writes the brief through the same code as a manual one, so each tool is still read at most once a day and today's cached data is reused.
+- **Never twice.** The server checks for a brief from today inside its one-at-a-time queue and returns that one if it exists. Two devices opening at once, a reopened app, or a re-render all end up with one brief. On the device, a failed attempt waits 5 minutes before trying again.
+- **Online only.** Offline, the old brief is marked outdated and nothing is generated. It starts once the server is back.
+
 ## Rules OS follows
 
 - **One read per tool per day.** The first morning brief reads your tools, and later briefs reuse that data. "Refetch" is the only way to read again.
@@ -155,17 +181,36 @@ The app refuses plain `http://` for any address outside your local network, so y
 
 Your server runs on your own machine, so it can be out of reach. Web and mobile keep working when it is:
 
+- **Startup:** when the app opens, it checks the server with a hard 3 second limit before loading anything. If there's no answer in time, it opens straight into offline mode with your saved briefs, updates and goals, and a banner saying you're offline.
+- **Foreground:** each time you return to the app, it checks again. When the server answers, it switches back online and syncs without a restart.
+
 - **Read:** your last 30 briefs, goals, schedules and updates are saved on each device.
 - **Write:** updates and goal edits made offline are queued on the device. Updates keep the time you wrote them, and are never saved twice. If two devices edit goals offline, the last one to sync wins.
 - **Status:** Settings → Server shows the machine's name and whether it's online. The app checks every 30 seconds, so a lost connection can take up to about 40 seconds to show. Expand it to see the full address and token.
 - **Reconnect:** the app checks for your server every 10 seconds while offline. When it's back, it sends what's queued and fetches anything new, such as briefs written on schedule.
 - **Needs your server:** writing a new brief, and changing schedules, tools or keys.
+- **Can't save:** offline, a read that was never saved on this device, such as on first launch, shows an error with Try again.
 
 Saved content is stored in the app's own storage, or in the browser's on web, without extra encryption. "Disconnect this device" removes it.
 
 ## Configuration
 
-Everything is optional. Copy [.env.example](.env.example) to `server/.env`, which is git-ignored and loaded at startup, or add your keys in the app. Each brief is capped at 4,000 output tokens. `OS_MODEL` sets the OpenRouter model until you choose one in Settings. If your connected accounts already exist in Composio under another user ID, set `OS_COMPOSIO_USER_ID` to match it.
+Everything is optional. These are the variable names. Never commit their values.
+
+| Variable | Where | What it does |
+|---|---|---|
+| `COMPOSIO_API_KEY` | server | Composio key. You can add it in the app instead |
+| `OPENROUTER_API_KEY` | server | OpenRouter key, if OpenRouter is your provider |
+| `OLLAMA_API_KEY` | server | Only for Ollama's hosted `https://ollama.com` |
+| `OS_MODEL` | server | OpenRouter model until you choose one in Settings |
+| `OS_COMPOSIO_USER_ID` | server | Composio user ID, if your accounts already exist under another |
+| `OS_TOKEN` | server | Fixes the server token instead of generating one |
+| `OS_DATA_DIR` | server | Where the database and token live. Defaults to `~/.os-app` |
+| `OS_WEB_DIR` | server | Where the built web app is served from |
+| `HOST`, `PORT` | server | Listen address. Defaults to `127.0.0.1` and `8787` |
+| `EXPO_PUBLIC_OS_URL` | app | Prefills the server address in a build |
+
+ Copy [.env.example](.env.example) to `server/.env`, which is git-ignored and loaded at startup, or add your keys in the app. Each brief is capped at 4,000 output tokens. `OS_MODEL` sets the OpenRouter model until you choose one in Settings. If your connected accounts already exist in Composio under another user ID, set `OS_COMPOSIO_USER_ID` to match it.
 
 Schedules only run while the server is running, and a brief missed during downtime isn't made up later. On a Mac, `sh scripts/install-macos-service.sh` keeps it running, including after restarts. Elsewhere, use `systemd` or similar.
 
@@ -186,6 +231,17 @@ npm run typecheck
 ```
 
 `npm run setup` also turns on a commit check that blocks `.env` files, databases, and anything that looks like an API key or a private Tailscale address.
+
+`npm test` runs the server tests (Vitest) and the app tests (`node:test` through `tsx`), including the 3 second startup check against a server that never answers.
+
+## Contributing
+
+Issues and pull requests are welcome. Please:
+
+- Run `npm run setup` once, so the commit check is on.
+- Keep `npm test` and `npm run typecheck` passing, and add a test for new behaviour.
+- Keep tool reads within the once-a-day budget, and never add write operations to a collector.
+- Never include real keys, tokens, `.env` files, databases, briefs or Tailscale addresses, even in issues.
 
 Reporting a security problem? See [SECURITY.md](SECURITY.md).
 
