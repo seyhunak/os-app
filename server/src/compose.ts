@@ -1,7 +1,7 @@
 import type { Kind, SourceReport } from './db.ts';
 
 export const SOURCES_MARKER = '{{SOURCES}}';
-export const DEFAULT_MODEL = 'qwen/qwen3-30b-a3b-instruct-2507';
+export const DEFAULT_MODEL = 'qwen/qwen3.7-flash';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 const REQUEST_TIMEOUT_MS = 180_000;
 export type Provider = 'openrouter';
@@ -162,38 +162,97 @@ interface ChatCompletion {
   error?: { message?: string; code?: number };
 }
 
-export function createOpenRouterComposer(apiKey: string, model: string): Composer {
+/** Rate limits and busy providers pass. Anything else, such as a bad key, won't on a retry. */
+const isRetryable = (error: unknown) => error instanceof OpenRouterError && (error.status === 429 || error.status === 502 || error.status === 503);
+/** Waits before the second and third tries. Shared provider pools usually free up within seconds. */
+export const RETRY_DELAYS_MS = [2_000, 6_000];
+/** How many other models OpenRouter may fall back to, after the one you chose. */
+const FALLBACKS = 2;
+
+export interface ComposerOptions {
+  /** Other models to try when yours is rate limited, closest in price first. Only asked for on a failure. */
+  fallbacks?: () => Promise<string[]>;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
+ * Writes with your model. If it's rate limited or busy, it waits and tries again, then lets
+ * OpenRouter fall back to cheap recommended models. A brief written by a fallback says so.
+ */
+export function createOpenRouterComposer(apiKey: string, model: string, options: ComposerOptions = {}): Composer {
+  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   return async (input) => {
-    const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      body: JSON.stringify({
-        model,
-        max_tokens: MAX_OUTPUT_TOKENS,
-        reasoning: { exclude: true },
-        // Tool data can include email, so skip providers that train on or keep prompts for that.
-        provider: { data_collection: 'deny' },
-        messages: [
-          { role: 'system', content: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}` },
-          { role: 'user', content: renderUserPrompt(input) },
-        ],
-      }),
-    });
-    const data = (await response.json().catch(() => ({}))) as ChatCompletion;
-    if (!response.ok || data.error) {
-      throw new OpenRouterError(data.error?.code ?? response.status, data.error?.message ?? `HTTP ${response.status}`);
+    // Thinking would spend the output cap before the brief is written, so it's off. A few models
+    // can't turn it off, so those are asked to keep it out of the answer instead.
+    let reasoning: Record<string, boolean> = { enabled: false };
+    const send = async (fallbacks: string[]): Promise<{ text: string; usedModel: string }> => {
+      const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        body: JSON.stringify({
+          model,
+          // OpenRouter tries these in order when the first is rate limited or down.
+          ...(fallbacks.length ? { models: [model, ...fallbacks] } : {}),
+          max_tokens: MAX_OUTPUT_TOKENS,
+          reasoning,
+          // Tool data can include email, so skip providers that train on or keep prompts for that.
+          provider: { data_collection: 'deny' },
+          messages: [
+            { role: 'system', content: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}` },
+            { role: 'user', content: renderUserPrompt(input) },
+          ],
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as ChatCompletion & { model?: string };
+      if (!response.ok || data.error) {
+        const status = data.error?.code ?? response.status;
+        if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) {
+          reasoning = { exclude: true };
+          return send(fallbacks);
+        }
+        throw new OpenRouterError(status, data.error?.message ?? `HTTP ${response.status}`);
+      }
+      const choice = data.choices?.[0];
+      if (choice?.finish_reason === 'content_filter') throw new Error('the AI model declined this brief');
+      if (choice?.finish_reason === 'length') throw new Error('the AI model ran out of output tokens');
+      const text = (choice?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      if (!text) throw new Error('the AI model returned an empty brief');
+      return { text, usedModel: data.model ?? model };
+    };
+
+    let fallbacks: string[] = [];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const { text, usedModel } = await send(fallbacks);
+        if (usedModel === model || !fallbacks.includes(usedModel)) return text;
+        const notice = `> Written by ${usedModel}, because ${model} was rate limited by its provider.`;
+        return /^# .*\n/.test(text) ? text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${text}`;
+      } catch (error) {
+        if (!isRetryable(error) || attempt >= RETRY_DELAYS_MS.length) throw error;
+        if (attempt === 0 && options.fallbacks) fallbacks = (await options.fallbacks().catch(() => [])).filter((id) => id !== model).slice(0, FALLBACKS);
+        await sleep(RETRY_DELAYS_MS[attempt]!);
+      }
     }
-    const choice = data.choices?.[0];
-    if (choice?.finish_reason === 'content_filter') throw new Error('the AI model declined this brief');
-    if (choice?.finish_reason === 'length') throw new Error('the AI model ran out of output tokens');
-    const text = (choice?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    if (!text) throw new Error('the AI model returned an empty brief');
-    return text;
   };
 }
 
-export const createComposer = (config: AiConfig): Composer => createOpenRouterComposer(config.apiKey, config.model);
+/** Recommended models nearest in price to yours, for when yours is rate limited. */
+export async function fallbackModels(apiKey: string, model: string): Promise<string[]> {
+  const models = await listOpenRouterModels(apiKey);
+  return nearestRecommended(models.filter((m) => m.recommended), model, models.find((m) => m.id === model)?.price);
+}
+
+/** Recommended ids other than yours, nearest your model's price first. */
+export function nearestRecommended(recommended: Array<{ id: string; price: number }>, model: string, price = recommended.find((m) => m.id === model)?.price ?? 0): string[] {
+  return recommended
+    .filter((m) => m.id !== model)
+    .sort((a, b) => Math.abs(a.price - price) - Math.abs(b.price - price))
+    .map((m) => m.id);
+}
+
+export const createComposer = (config: AiConfig): Composer =>
+  createOpenRouterComposer(config.apiKey, config.model, { fallbacks: () => fallbackModels(config.apiKey, config.model) });
 
 const perMillion = (price: unknown) => {
   const value = Number(price) * 1_000_000;
@@ -257,7 +316,7 @@ export function describeComposeError(error: unknown): string {
     if (error.status === 403 && /injection/i.test(error.message)) return "your OpenRouter guardrail flagged possible prompt injection in today's tool data";
     if (error.status === 404 && /guardrail/i.test(error.message)) return "your OpenRouter guardrail doesn't allow this model";
     if (error.status === 402) return 'the OpenRouter key is out of credit or over its budget';
-    if (error.status === 429) return 'OpenRouter is rate limiting this key';
+    if (error.status === 429) return "the model's provider is rate limiting it, and the fallback models were busy too. Try again in a minute, or choose another model in Settings";
     return `OpenRouter returned an error (${error.status})`;
   }
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'TypeError')) return "OpenRouter couldn't be reached";

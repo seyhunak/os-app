@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { BriefService, selectedToolkits } from './briefs.ts';
 import { TOOLKITS, toolkitBySlug } from './collectors.ts';
 import type { ComposioGateway, ConnectedAccount } from './composio.ts';
-import { briefPrompt, createComposer, DEFAULT_MODEL, listOpenRouterModels, type AiConfig, type Composer, type ModelOption } from './compose.ts';
+import { briefPrompt, createComposer, DEFAULT_MODEL, listOpenRouterModels, nearestRecommended, type AiConfig, type Composer, type ModelOption } from './compose.ts';
 import type { Schedule, Store } from './db.ts';
 import { redact } from './redact.ts';
 import { Scheduler } from './scheduler.ts';
@@ -97,6 +97,14 @@ export function createApp(deps: AppDeps) {
     return list;
   };
   const forgetAccounts = () => store.deleteSetting('accounts_cache');
+  const savedFallbacks = (): string[] => {
+    try {
+      const saved = JSON.parse(store.getSetting('recommended_models') ?? '[]') as Array<{ id: string; price: number }>;
+      return nearestRecommended(saved, openRouterModel()).slice(0, 2);
+    } catch {
+      return [];
+    }
+  };
   const lastFour = (key: string | null | undefined) => (key ? key.slice(-4) : null);
 
   const briefs = new BriefService({
@@ -143,6 +151,8 @@ export function createApp(deps: AppDeps) {
     provider: 'openrouter',
     model: openRouterModel(),
     openrouterModel: openRouterModel(),
+    // For a phone writing offline when your model is rate limited. Empty until Settings has listed models.
+    fallbackModels: savedFallbacks(),
     timezone: store.getSetting('timezone'),
     // Only the end of each key is in the status. The OpenRouter key itself has its own route below.
     composioHint: lastFour(composioKey()),
@@ -204,6 +214,8 @@ export function createApp(deps: AppDeps) {
     if (key) {
       try {
         models = await listOpenRouterModels(key);
+        // Kept so phones know which models to fall back to offline, without listing them again.
+        store.setSetting('recommended_models', JSON.stringify(models.filter((m) => m.recommended).map(({ id, price }) => ({ id, price }))));
       } catch {
         error = "Couldn't get your models from OpenRouter. You can still type a model name.";
       }

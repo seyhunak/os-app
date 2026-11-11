@@ -97,6 +97,29 @@ describe('offline brief: AI on this device', () => {
     assert.match(result.markdown, /OpenRouter returned an error \(402\)/);
   });
 
+  it('retries a rate-limited model with fallbacks, and names the one that wrote it', async () => {
+    const bodies: Array<{ models?: string[] }> = [];
+    const replies = [
+      new Response(JSON.stringify({ error: { code: 429, message: 'rate-limited upstream' } }), { status: 429 }),
+      new Response(JSON.stringify({ model: 'b/two', choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] })),
+    ];
+    const fetchImpl = (async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body))); return replies.shift()!; }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'a/one', fallbacks: ['a/one', 'b/two', 'c/three'], fetchImpl, retryDelaysMs: [1, 1] });
+    assert.equal(result.generator, 'ai');
+    assert.equal(bodies[0]!.models, undefined);
+    assert.deepEqual(bodies[1]!.models, ['a/one', 'b/two', 'c/three']);
+    assert.match(result.markdown, /Written by b\/two, because a\/one was rate limited/);
+  });
+
+  it('says so when every try was rate limited', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => { calls++; return new Response(JSON.stringify({ error: { code: 429 } }), { status: 429 }); }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'm', fetchImpl, retryDelaysMs: [1, 1] });
+    assert.equal(calls, 3);
+    assert.equal(result.generator, 'digest');
+    assert.match(result.markdown, /rate limited/);
+  });
+
   it("falls back when there's no internet at all", async () => {
     const { fetchImpl } = fakeFetch('throw');
     const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'm', fetchImpl });

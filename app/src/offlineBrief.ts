@@ -26,6 +26,8 @@ export interface OfflineBriefResult {
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 /** Offline briefs try the AI for this long, then fall back to the plain version. */
 export const OFFLINE_AI_TIMEOUT_MS = 60_000;
+/** Waits before the second and third tries when the model is rate limited. */
+const RETRY_DELAYS_MS = [2_000, 6_000];
 const UPDATE_DAYS = 14;
 const MARKER = '{{SOURCES}}';
 
@@ -101,44 +103,63 @@ function finish(body: string, sources: Source[], marker: string): string {
 
 interface Completion {
   choices?: Array<{ finish_reason?: string; message?: { content?: string | null } }>;
-  error?: { message?: string };
+  error?: { message?: string; code?: number };
 }
 
 /**
  * Writes a brief without the server. With an OpenRouter key on this device and the cached rules,
  * the AI writes it; otherwise, or if that fails, it's the plain version. Never throws.
  */
-export async function writeOfflineBrief(input: OfflineBriefInput, ai: { prompt?: BriefPrompt; apiKey?: string | null; model?: string | null; fetchImpl?: typeof fetch; timeoutMs?: number } = {}): Promise<OfflineBriefResult> {
+export async function writeOfflineBrief(input: OfflineBriefInput, ai: { prompt?: BriefPrompt; apiKey?: string | null; model?: string | null; fallbacks?: string[]; fetchImpl?: typeof fetch; timeoutMs?: number; retryDelaysMs?: number[] } = {}): Promise<OfflineBriefResult> {
   const sources = sourcesFromLastScan(input.lastScan);
-  const { prompt, apiKey, model, fetchImpl = fetch, timeoutMs = OFFLINE_AI_TIMEOUT_MS } = ai;
+  const { prompt, apiKey, model, fallbacks = [], fetchImpl = fetch, timeoutMs = OFFLINE_AI_TIMEOUT_MS, retryDelaysMs = RETRY_DELAYS_MS } = ai;
   let reason = 'no OpenRouter key on this device';
   if (prompt && apiKey && model) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetchImpl(`${OPENROUTER_URL}/chat/completions`, {
-        method: 'POST',
-        signal: controller.signal,
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-        body: JSON.stringify({
-          model,
-          max_tokens: prompt.maxTokens,
-          reasoning: { exclude: true },
-          provider: { data_collection: 'deny' },
-          messages: [
-            { role: 'system', content: prompt.system[input.kind] },
-            { role: 'user', content: renderUserPrompt(input) },
-          ],
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as Completion;
-      const text = (data.choices?.[0]?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-      if (response.ok && !data.error && text && data.choices?.[0]?.finish_reason !== 'length') {
-        const notice = '> Offline draft, written on this device. Tools weren\'t read, so sources are from the last scan.';
-        const body = text.replace(/^(# .*\n)/, `$1\n${notice}\n`);
-        return { markdown: finish(body.includes(notice) ? body : `${notice}\n\n${body}`, sources, prompt.sourcesMarker), generator: 'ai', sources };
+      // Thinking would spend the output cap before the brief is written, so it's off where the model allows.
+      let reasoning: Record<string, boolean> = { enabled: false };
+      // A rate-limited model is tried again, then with fallbacks, all within the one time limit.
+      for (let attempt = 0; ; attempt++) {
+        const others = attempt ? fallbacks.filter((id) => id !== model).slice(0, 2) : [];
+        const response = await fetchImpl(`${OPENROUTER_URL}/chat/completions`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
+          body: JSON.stringify({
+            model,
+            ...(others.length ? { models: [model, ...others] } : {}),
+            max_tokens: prompt.maxTokens,
+            reasoning,
+            provider: { data_collection: 'deny' },
+            messages: [
+              { role: 'system', content: prompt.system[input.kind] },
+              { role: 'user', content: renderUserPrompt(input) },
+            ],
+          }),
+        });
+        const data = (await response.json().catch(() => ({}))) as Completion & { model?: string };
+        const status = response.ok ? (data.error?.code ?? 200) : response.status;
+        if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) {
+          reasoning = { exclude: true };
+          attempt--;
+          continue;
+        }
+        if ((status === 429 || status === 502 || status === 503) && attempt < retryDelaysMs.length) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelaysMs[attempt]));
+          continue;
+        }
+        const text = (data.choices?.[0]?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        if (response.ok && !data.error && text && data.choices?.[0]?.finish_reason !== 'length') {
+          const by = data.model && data.model !== model && others.includes(data.model) ? ` Written by ${data.model}, because ${model} was rate limited.` : '';
+          const notice = `> Offline draft, written on this device. Tools weren't read, so sources are from the last scan.${by}`;
+          const body = text.replace(/^(# .*\n)/, `$1\n${notice}\n`);
+          return { markdown: finish(body.includes(notice) ? body : `${notice}\n\n${body}`, sources, prompt.sourcesMarker), generator: 'ai', sources };
+        }
+        reason = status === 429 ? 'the AI model was rate limited, and so were its fallbacks' : response.ok && !data.error ? 'the AI model returned no usable brief' : `OpenRouter returned an error (${status})`;
+        break;
       }
-      reason = response.ok ? 'the AI model returned no usable brief' : `OpenRouter returned an error (${response.status})`;
     } catch {
       reason = "OpenRouter couldn't be reached";
     } finally {

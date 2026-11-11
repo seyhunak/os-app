@@ -147,7 +147,11 @@ Go to **Settings → Model**, paste your OpenRouter key once, and pick a model. 
 - **Only models that can write a brief.** Models that output anything but text, batch-only models, and models with under 32K tokens of context are left out. A model with an unknown price is left out too.
 - **Free models are listed but not recommended.** They're often rate limited, and some keep prompts, which OS doesn't allow.
 
-The default is `qwen/qwen3-30b-a3b-instruct-2507`, at well under a cent per brief. If a model fails, you still get a plain brief that explains why, such as a model your guardrails don't allow.
+The default is `qwen/qwen3.7-flash`, at well under a cent per brief.
+
+- **Rate limits.** Cheap models are often served by one provider from a shared pool, which runs out for a few seconds at a time. When that happens, OS waits 2 seconds and tries again, letting OpenRouter fall back to the two recommended models closest in price, then waits 6 seconds and tries once more. A brief written by a fallback model says so under its title. Offline briefs on the phone retry the same way.
+- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 4,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked to keep it out of the answer instead.
+- **Other failures.** You still get a plain brief that explains why, such as a model your guardrails don't allow.
 
 ### One key, online and offline
 

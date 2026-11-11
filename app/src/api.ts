@@ -24,6 +24,8 @@ export interface Status {
   /** The rest are missing from a status saved before servers reported them. */
   provider?: Provider;
   openrouterModel?: string;
+  /** Recommended models to fall back to when yours is rate limited. */
+  fallbackModels?: string[];
   model: string;
   timezone: string | null;
   selectedToolkits: string[];

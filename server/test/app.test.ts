@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.ts';
 import { endOfWeek, toolkitBySlug } from '../src/collectors.ts';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/composio.ts';
-import { createOpenRouterComposer, describeComposeError, listOpenRouterModels, extractNote, extractSourceSummaries, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
+import { createOpenRouterComposer, describeComposeError, listOpenRouterModels, nearestRecommended, extractNote, extractSourceSummaries, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/db.ts';
 import { redact } from '../src/redact.ts';
@@ -178,10 +178,45 @@ describe('choosing a model', () => {
     ] })));
     const models = await listOpenRouterModels('k');
     spy.mockRestore();
+    expect(nearestRecommended(models.filter((m) => m.recommended), 'meta-llama/llama-4-scout')).toEqual(['qwen/qwen3-30b-a3b-instruct-2507', 'openai/gpt-oss-20b', 'google/gemini-2.5-flash']);
     expect(models.filter((m) => m.recommended).map((m) => m.id)).toEqual(['openai/gpt-oss-20b', 'qwen/qwen3-30b-a3b-instruct-2507', 'meta-llama/llama-4-scout', 'google/gemini-2.5-flash']);
     expect(models.map((m) => m.id)).not.toContain('openai/gpt-oss-20b:batch');
     expect(models.map((m) => m.id)).not.toContain('google/lyria-3-pro-preview');
     expect(models.map((m) => m.price)).toEqual([...models.map((m) => m.price)].sort((a, b) => a - b));
+  });
+
+  it('retries a rate-limited model, then falls back to a recommended one and says so', async () => {
+    const sent: Array<{ model: string; models?: string[] }> = [];
+    const replies = [
+      new Response(JSON.stringify({ error: { code: 429, message: 'temporarily rate-limited upstream' } }), { status: 429 }),
+      new Response(JSON.stringify({ model: 'deepseek/deepseek-v4-flash', choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] })),
+    ];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return replies.shift()!;
+    });
+    const waits: number[] = [];
+    const compose = createOpenRouterComposer('k', 'qwen/qwen3.7-flash', { fallbacks: async () => ['qwen/qwen3.7-flash', 'deepseek/deepseek-v4-flash', 'openai/gpt-oss-20b', 'z-ai/glm-5.3-flash'], sleep: async (ms) => { waits.push(ms); } });
+    const text = await compose(input);
+    spy.mockRestore();
+    expect(sent[0]!.models).toBeUndefined();
+    expect(sent[1]!.models).toEqual(['qwen/qwen3.7-flash', 'deepseek/deepseek-v4-flash', 'openai/gpt-oss-20b']);
+    expect(waits).toEqual([2000]);
+    expect(text).toBe('# Good evening\n\n> Written by deepseek/deepseek-v4-flash, because qwen/qwen3.7-flash was rate limited by its provider.\n\nBody');
+  });
+
+  it('gives up after three rate-limited tries, and never retries a rejected key', async () => {
+    let calls = 0;
+    let spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { calls++; return new Response(JSON.stringify({ error: { code: 429, message: 'busy' } }), { status: 429 }); });
+    const error = await createOpenRouterComposer('k', 'm', { sleep: async () => undefined })(input).catch((e) => e);
+    spy.mockRestore();
+    expect(calls).toBe(3);
+    expect(describeComposeError(error)).toContain('rate limiting');
+    calls = 0;
+    spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { calls++; return new Response(JSON.stringify({ error: { code: 401, message: 'no' } }), { status: 401 }); });
+    await createOpenRouterComposer('k', 'm', { sleep: async () => undefined })(input).catch(() => undefined);
+    spy.mockRestore();
+    expect(calls).toBe(1);
   });
 
   it('asks for a key before listing OpenRouter models', async () => {
@@ -608,8 +643,20 @@ describe('OpenRouter', () => {
     const fetchMock = reply({ choices: [{ finish_reason: 'stop', message: { content: '<think>hmm</think># Good morning' } }] });
     await expect(createOpenRouterComposer('sk-or-x', 'some/model')(input)).resolves.toBe('# Good morning');
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
-    expect(body).toMatchObject({ model: 'some/model', max_tokens: 4000, provider: { data_collection: 'deny' } });
+    expect(body).toMatchObject({ model: 'some/model', max_tokens: 4000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
     expect(body.tools).toBeUndefined();
+  });
+
+  it("hides reasoning instead, for a model that can't turn it off", async () => {
+    const bodies: Array<{ reasoning: unknown }> = [];
+    const replies = [
+      new Response(JSON.stringify({ error: { code: 400, message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' } }), { status: 400 }),
+      new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '# Good morning' } }] })),
+    ];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return replies.shift()!; });
+    await expect(createOpenRouterComposer('k', 'm')(input)).resolves.toBe('# Good morning');
+    spy.mockRestore();
+    expect(bodies.map((b) => b.reasoning)).toEqual([{ enabled: false }, { exclude: true }]);
   });
 
   it('turns failures into clear reasons', async () => {
