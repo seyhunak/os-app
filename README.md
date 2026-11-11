@@ -142,9 +142,9 @@ OS uses [OpenRouter](https://openrouter.ai) only. Ollama was removed, since its 
 
 Go to **Settings → Model**, paste your OpenRouter key once, and pick a model. Your next brief uses it.
 
-- **Recommended first.** The list opens on cheap models known to follow the brief's layout well, such as Qwen3 30B, DeepSeek V3, Gemini Flash, GPT-5 mini and GPT-OSS. The cheapest is marked "Best value".
+- **Recommended first.** The list opens on one model per major lab (OpenAI, Google, Anthropic, DeepSeek, Qwen, Mistral, Meta, Z.ai, Moonshot, MiniMax, xAI): the cheapest general writing model of at least 14B parameters, under $3 per million tokens in and out. Coding, safety, image, audio and batch models are skipped. The rule picks up new models as they appear, with no list of names to maintain. The cheapest is marked "Best value".
 - **Cheapest to most expensive.** "Show all models" lists every model your key's guardrails allow, sorted by price, with the cost per million tokens in and out. Type to search them.
-- **Only models that can write a brief.** Models that don't output text, or whose context is under 32K tokens, are left out. A model with an unknown price is left out too.
+- **Only models that can write a brief.** Models that output anything but text, batch-only models, and models with under 32K tokens of context are left out. A model with an unknown price is left out too.
 - **Free models are listed but not recommended.** They're often rate limited, and some keep prompts, which OS doesn't allow.
 
 The default is `qwen/qwen3-30b-a3b-instruct-2507`, at well under a cent per brief. If a model fails, you still get a plain brief that explains why, such as a model your guardrails don't allow.

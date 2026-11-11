@@ -18,22 +18,12 @@ export interface ModelOption {
 const MIN_CONTEXT_TOKENS = 32_000;
 /** Above this, per million tokens in and out together, a model isn't "cheap". */
 const CHEAP_PRICE = 3;
-/**
- * Families that follow the brief's layout well for little money. Matched against the model id, and
- * only counted as recommended when also under CHEAP_PRICE, so a pricey variant isn't flagged.
- */
-const GOOD_CHEAP = [
-  /^qwen\/qwen3-(30b-a3b|235b-a22b|next-80b-a3b)(-instruct)?(-2507)?$/,
-  /^deepseek\/deepseek-(chat-v3|v3\.\d)/,
-  /^google\/gemini-2\.\d-flash(-lite)?(-\d+)?$/,
-  /^google\/gemini-3(\.\d)?-flash/,
-  /^openai\/gpt-(4\.1|5(\.\d)?)-(mini|nano)$/,
-  /^openai\/gpt-oss-(120b|20b)$/,
-  /^mistralai\/mistral-small-3\.\d/,
-  /^meta-llama\/llama-4-(maverick|scout)$/,
-  /^z-ai\/glm-4\.\d-air$/,
-  /^moonshotai\/kimi-k2/,
-];
+/** Labs whose general models reliably follow the brief's layout. Each one's cheapest fit is recommended. */
+const TRUSTED_LABS = ['openai', 'google', 'anthropic', 'deepseek', 'qwen', 'mistralai', 'meta-llama', 'z-ai', 'moonshotai', 'minimax', 'x-ai'];
+/** Made for one job, such as code, safety checks, images or role play, rather than writing. */
+const SPECIALIZED = /coder|codex|code|build|guard|safe|embed|extract|summar|apply|vision|image|audio|omni|ocr|thinking|-vl|-r1|-rp/i;
+/** Under 14B parameters, by the size in the id, such as llama-3.1-8b, or known to be (Mistral Nemo is 12B). "a3b" is active parameters, so it doesn't count. */
+const tooSmall = (id: string) => /mistral-nemo/i.test(id) || [...id.matchAll(/-(\d+(?:\.\d+)?)b(?![a-z])/gi)].some((m) => Number(m[1]) < 14);
 /** Caps what one brief can cost, since the key has a budget. */
 const MAX_OUTPUT_TOKENS = 4000;
 
@@ -217,29 +207,40 @@ interface OpenRouterModel {
   architecture?: { output_modalities?: string[] };
 }
 
-export const isRecommended = (id: string, price: number) => price > 0 && price <= CHEAP_PRICE && GOOD_CHEAP.some((pattern) => pattern.test(id));
+const lab = (id: string) => id.split('/')[0]!;
+
+/** A general writing model from a trusted lab, cheap but not free, and not an alias or a variant like :free. */
+export const canRecommend = (id: string, price: number) =>
+  price > 0 && price <= CHEAP_PRICE && TRUSTED_LABS.includes(lab(id)) && !/[~:]/.test(id) && !SPECIALIZED.test(id) && !tooSmall(id);
 
 /**
- * Only what the key's own guardrails allow, cheapest first. Models that can't write text, or whose
- * window is too small for a brief, are left out. Cheap models that write well are marked.
+ * Only what the key's own guardrails allow, cheapest first. Models that only write text, with a big
+ * enough window for a brief, are kept. Each trusted lab's cheapest fit is recommended, so the short
+ * list stays cheap but capable as new models appear, with no list of names to keep up to date.
  */
 export async function listOpenRouterModels(apiKey: string): Promise<ModelOption[]> {
   const response = await fetch(`${OPENROUTER_URL}/models/user`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new OpenRouterError(response.status, `HTTP ${response.status}`);
   const { data } = (await response.json()) as { data?: OpenRouterModel[] };
   const cost = (m: OpenRouterModel) => (Number(m.pricing?.prompt ?? 0) + Number(m.pricing?.completion ?? 0)) * 1_000_000;
-  return (data ?? [])
+  const models = (data ?? [])
     // A negative price means OpenRouter routes it to a model chosen later, so the cost isn't known.
     .filter((m) => cost(m) >= 0)
-    .filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('text'))
+    // Batch models answer later, not in one request. Music and image models can't write a brief.
+    .filter((m) => !m.id.endsWith(':batch'))
+    .filter((m) => (m.architecture?.output_modalities ?? ['text']).every((x) => x === 'text'))
     .filter((m) => !m.context_length || m.context_length >= MIN_CONTEXT_TOKENS)
-    .sort((a, b) => cost(a) - cost(b) || a.id.localeCompare(b.id))
-    .map((m) => ({
-      id: m.id,
-      note: cost(m) === 0 ? 'Free, but often rate limited' : `$${perMillion(m.pricing?.prompt)} in, $${perMillion(m.pricing?.completion)} out, per million tokens`,
-      recommended: isRecommended(m.id, cost(m)),
-      price: cost(m),
-    }));
+    .sort((a, b) => cost(a) - cost(b) || a.id.localeCompare(b.id));
+  const picked = new Set<string>();
+  for (const m of models) {
+    if (!picked.has(lab(m.id)) && canRecommend(m.id, cost(m))) picked.add(m.id).add(lab(m.id));
+  }
+  return models.map((m) => ({
+    id: m.id,
+    note: cost(m) === 0 ? 'Free, but often rate limited' : `$${perMillion(m.pricing?.prompt)} in, $${perMillion(m.pricing?.completion)} out, per million tokens`,
+    recommended: picked.has(m.id),
+    price: cost(m),
+  }));
 }
 
 export async function verifyOpenRouterKey(apiKey: string): Promise<void> {

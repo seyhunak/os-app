@@ -158,19 +158,29 @@ describe('choosing a model', () => {
     expect(models[2]!.note).toBe('$10.00 in, $30.00 out, per million tokens');
   });
 
-  it('recommends cheap models that write well, but not pricey or free ones', async () => {
+  it('recommends the cheapest capable model from each trusted lab', async () => {
+    const at = (id: string, perMillion: number, extra = {}) => ({ id, pricing: { prompt: String(perMillion / 2e6), completion: String(perMillion / 2e6) }, ...extra });
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ data: [
-      { id: 'qwen/qwen3-30b-a3b-instruct-2507', pricing: { prompt: '0.00000008', completion: '0.00000033' } },
-      { id: 'deepseek/deepseek-chat-v3.1', pricing: { prompt: '0.0000002', completion: '0.0000008' } },
-      { id: 'openai/gpt-5-mini', pricing: { prompt: '0.00000025', completion: '0.000002' } },
-      { id: 'openai/gpt-5', pricing: { prompt: '0.00000125', completion: '0.00001' } },
-      { id: 'qwen/qwen3-30b-a3b:free', pricing: { prompt: '0', completion: '0' } },
-      { id: 'some/unknown-model', pricing: { prompt: '0.0000001', completion: '0.0000001' } },
+      at('meta-llama/llama-3.1-8b-instruct', 0.06),
+      at('openai/gpt-oss-20b:batch', 0.1),
+      at('openai/gpt-oss-20b', 0.11),
+      at('qwen/qwen3-coder-30b-a3b-instruct', 0.2),
+      at('qwen/qwen3-30b-a3b-instruct-2507', 0.39),
+      at('meta-llama/llama-4-scout', 0.4),
+      at('openai/gpt-5-nano', 0.45),
+      at('qwen/qwen3-235b-a22b-2507', 0.64),
+      at('google/lyria-3-pro-preview', 0.5, { architecture: { output_modalities: ['text', 'audio'] } }),
+      at('~google/gemini-flash-latest', 0.6),
+      at('google/gemini-2.5-flash', 2.8),
+      at('openai/gpt-5', 11.25),
+      at('qwen/qwen3-30b-a3b:free', 0),
+      at('unknown/maker-70b', 0.1),
     ] })));
     const models = await listOpenRouterModels('k');
     spy.mockRestore();
-    const recommended = models.filter((m) => m.recommended).map((m) => m.id);
-    expect(recommended).toEqual(['qwen/qwen3-30b-a3b-instruct-2507', 'deepseek/deepseek-chat-v3.1', 'openai/gpt-5-mini']);
+    expect(models.filter((m) => m.recommended).map((m) => m.id)).toEqual(['openai/gpt-oss-20b', 'qwen/qwen3-30b-a3b-instruct-2507', 'meta-llama/llama-4-scout', 'google/gemini-2.5-flash']);
+    expect(models.map((m) => m.id)).not.toContain('openai/gpt-oss-20b:batch');
+    expect(models.map((m) => m.id)).not.toContain('google/lyria-3-pro-preview');
     expect(models.map((m) => m.price)).toEqual([...models.map((m) => m.price)].sort((a, b) => a - b));
   });
 
