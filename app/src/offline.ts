@@ -5,7 +5,7 @@ import { ApiError, createApi, PROBE_TIMEOUT_MS, type Brief, type Kind, type Ledg
 import { writeOfflineBrief, type BriefPrompt } from './offlineBrief';
 import { probe, withTimeout } from './connectivity';
 import { archivedIds, createOutbox, isOfflineError, newClientId, queueAndSend, SAVE_WAIT_MS, type Op } from './outbox';
-import { loadPhoneAiKey, type Connection } from './storage';
+import { clearPhoneAiKey, loadPhoneAiKey, savePhoneAiKey, type Connection } from './storage';
 
 const OFFLINE_CHECK_MS = 10_000;
 const ONLINE_CHECK_MS = 30_000;
@@ -138,6 +138,7 @@ export function createOfflineApi(connection: Connection) {
       await Promise.all([read('status', api.status), read('schedules', api.schedules), read('goals', api.goals), read('ledger', api.ledger)]);
       // The rules for writing a brief offline. An older server doesn't have them, which is fine.
       await read('prompt', api.briefPrompt).catch(() => undefined);
+      await syncPhoneKey();
       const savedAt = new Date().toISOString();
       await save(keys.savedAt, savedAt);
       lastSync = Date.now();
@@ -165,6 +166,26 @@ export function createOfflineApi(connection: Connection) {
   /** The first check, shared by every read made while the app opens. */
   let startupCheck: Promise<void> | null = null;
   const ready = () => (startupCheck ??= check());
+
+  /**
+   * The phone keeps the server's OpenRouter key in its Keychain, so offline briefs use the same key
+   * with no second paste. Removing it on the server removes it here. Web has no secure store, so skips it.
+   */
+  async function syncPhoneKey(): Promise<void> {
+    if (Platform.OS === 'web') return;
+    const status = await load<Status>(`${prefix}:status`);
+    if (!status) return;
+    try {
+      if (!status.openrouter) {
+        if (await loadPhoneAiKey()) await clearPhoneAiKey();
+        return;
+      }
+      const { apiKey } = await api.openRouterKey();
+      if (apiKey && apiKey !== (await loadPhoneAiKey())) await savePhoneAiKey(apiKey);
+    } catch {
+      // An older server without this route, or a blip. The next sync tries again.
+    }
+  }
 
   return {
     ...api,
@@ -267,6 +288,11 @@ export function createOfflineApi(connection: Connection) {
     },
 
     sync: () => check().then(() => sync()),
+    /** Copies the server's OpenRouter key to this phone now, rather than at the next sync. */
+    syncPhoneKey: async () => {
+      await read('status', api.status).catch(() => undefined);
+      await syncPhoneKey();
+    },
     subscribe: (listener: () => void) => {
       listeners.add(listener);
       return () => {

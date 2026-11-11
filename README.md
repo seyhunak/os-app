@@ -9,7 +9,7 @@
 
 A short daily brief from your own tools: what matters, what to drop, and what to do next.
 
-OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses an AI model through [OpenRouter](https://openrouter.ai) or [Ollama](https://ollama.com) to rank what it finds against your goals, and writes a brief on a schedule you choose. You run the server yourself, and read your briefs on the web, iPhone or Android.
+OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses a cheap AI model through [OpenRouter](https://openrouter.ai) to rank what it finds against your goals, and writes a brief on a schedule you choose. You run the server yourself, and read your briefs on the web, iPhone or Android.
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
@@ -22,20 +22,21 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 │ - saved copy of briefs,  │ ────────────▶ │ Hono server (server/)                │
 │   ledger, goals          │  Bearer token │ - SQLite: briefs, ledger, pull cache │
 │ - offline queue          │               │ - scheduler (morning / evening)      │
-└──────────────────────────┘               │ - Composio  → your tools (read-only) │
-                                           │ - OpenRouter or Ollama → the brief   │
+│ - offline briefs, same   │               │ - Composio  → your tools (read-only) │
+│   OpenRouter key         │               │ - OpenRouter → the brief             │
+└──────────────────────────┘               │                                      │
                                            └──────────────────────────────────────┘
 ```
 
-- **Server** (`server/`): a single Node process that listens on `127.0.0.1` only. It holds your keys, reads your tools through Composio, writes briefs with OpenRouter or Ollama, and serves the web app. On a Mac it runs as a launch agent, so it starts at login and restarts if it stops.
+- **Server** (`server/`): a single Node process that listens on `127.0.0.1` only. It holds your keys, reads your tools through Composio, writes briefs with OpenRouter, and serves the web app. On a Mac it runs as a launch agent, so it starts at login and restarts if it stops.
 - **Tailscale** puts the server on a private HTTPS address, `https://<machine>.<tailnet>.ts.net:8443`, that only your own devices can reach, on any network.
-- **Client** (`app/`): one Expo codebase for iOS, Android and web. It talks to the server with a token and keeps a copy of what it last read, so it still works when the Mac is asleep.
+- **Client** (`app/`): one Expo codebase for iOS, Android and web. It talks to the server with a token and keeps a copy of what it last read, so it still works when the Mac is asleep. On iPhone and Android it can also write a brief itself while the Mac is away.
 
 ## How it works
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** Gmail, Outlook, Google Calendar, Calendly, Google Tasks, Google Drive, Notion, Slack, GitHub, GitLab, Jira, Linear, Asana, Trello, Todoist, HubSpot and Hacker News.
-3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Choose OpenRouter or Ollama in Settings, along with the model. Without a model, you get a plain summary of what was read.
+3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Choose the model in Settings, where cheap models that write well are recommended. Without a key, you get a plain summary of what was read.
 4. **Choose a schedule.** Pick morning or evening briefs, the time, the days and the timezone. The server writes them, and any device can read them.
 
 ## What a brief looks like
@@ -53,7 +54,7 @@ Tap **Update** at the top of the app any time to log what you've done. Updates g
 
 ## Quick start
 
-You need Node 22.13 or newer, and a [Composio API key](https://composio.dev). An [OpenRouter API key](https://openrouter.ai/keys) or [Ollama](https://ollama.com) is optional.
+You need Node 22.13 or newer, and a [Composio API key](https://composio.dev). An [OpenRouter API key](https://openrouter.ai/keys) is optional.
 
 ```bash
 git clone https://github.com/seyhunak/os-app.git
@@ -113,8 +114,7 @@ Use `npx expo run:android` for Android. In the app, enter your server's address 
 
 - **Read-only.** OS only calls read operations. It can't send, post or delete anything.
 - **Stored on your server.** Summaries are cached in SQLite for 7 days. Briefs and your updates stay until you delete the database.
-- **Sent through OpenRouter, if it's your provider and you add a key.** Those summaries, your goals, your recent updates and the last brief's note go to OpenRouter and the model provider it picks. OS only allows providers that don't train on or store prompts for that purpose. With no model set up, nothing is sent.
-- **Sent through Ollama, if you choose it.** The same data goes to the Ollama address you set. A model on your own machine keeps it there. Models ending in `cloud`, and the `https://ollama.com` address, run on Ollama's servers, so your data is sent there. Settings marks which is which.
+- **Sent through OpenRouter, if you add a key.** Those summaries, your goals, your recent updates and the last brief's note go to OpenRouter and the model provider it picks. OS only allows providers that don't train on or store prompts for that purpose. With no key, nothing is sent.
 - **Sent to Composio.** Your tool requests go through Composio, under your own account.
 - **Redacted.** Meeting links, passcodes and common token formats are removed before anything is stored or sent.
 
@@ -138,16 +138,26 @@ If the newest brief on the Today screen is from yesterday or earlier, in your ph
 
 ## Choosing an AI model
 
-Go to **Settings → Model** and choose a provider, its key and a model. Your next brief uses it, and each provider remembers its own model.
+OS uses [OpenRouter](https://openrouter.ai) only. Ollama was removed, since its cloud models are no longer free and a local model is too slow for a brief on most machines.
 
-| Provider | Key | Models you see |
-|---|---|---|
-| OpenRouter (default) | Required | The ones your key's guardrails allow, cheapest first, with prices |
-| Ollama | Only for `https://ollama.com` | Whatever your Ollama has that can write text, with your own machine's models first |
+Go to **Settings → Model**, paste your OpenRouter key once, and pick a model. Your next brief uses it.
 
-For Ollama, the address defaults to `http://127.0.0.1:11434` as seen from the server. To keep your data on your machine, pull a chat model and choose one that doesn't end in `cloud`. An Ollama key is only ever sent over HTTPS.
+- **Recommended first.** The list opens on cheap models known to follow the brief's layout well, such as Qwen3 30B, DeepSeek V3, Gemini Flash, GPT-5 mini and GPT-OSS. The cheapest is marked "Best value".
+- **Cheapest to most expensive.** "Show all models" lists every model your key's guardrails allow, sorted by price, with the cost per million tokens in and out. Type to search them.
+- **Only models that can write a brief.** Models that don't output text, or whose context is under 32K tokens, are left out. A model with an unknown price is left out too.
+- **Free models are listed but not recommended.** They're often rate limited, and some keep prompts, which OS doesn't allow.
 
-If a model fails, you still get a plain brief that explains why, such as a model your plan doesn't include.
+The default is `qwen/qwen3-30b-a3b-instruct-2507`, at well under a cent per brief. If a model fails, you still get a plain brief that explains why, such as a model your guardrails don't allow.
+
+### One key, online and offline
+
+The key you save in Settings is used by the server for scheduled and manual briefs, and by the phone for briefs written while the server is out of reach. You paste it once:
+
+- Saving the key in the iPhone or Android app also stores it in that phone's Keychain or Keystore.
+- Any other phone signed in to your server copies it from the server at its next sync, through `GET /api/credentials/openrouter`, which needs the server token like every other route.
+- Removing or replacing the key in Settings does the same on every phone at its next sync.
+
+The web app never keeps the key, since a browser has no secure place for it.
 
 ## Reaching your server from your phone
 
@@ -185,10 +195,12 @@ Your server runs on your own machine, so it can be out of reach. Web and mobile 
 - **Foreground:** each time you return to the app, it checks again. When the server answers, it switches back online and syncs without a restart.
 
 - **Read:** your last 30 briefs, goals, schedules and updates are saved on each device.
-- **Write:** updates and goal edits made offline are queued on the device. Updates keep the time you wrote them, and are never saved twice. If two devices edit goals offline, the last one to sync wins.
+- **Write:** updates, goal edits and brief deletes made offline go into a queue on the device and count as saved at once. Online, saving waits at most 4 seconds for the server, so a dead connection never hangs Save. The queue is sent oldest first, once each, when the server is back. Updates keep the time you wrote them. If two devices edit goals offline, the last one to sync wins.
+- **New briefs:** offline, the phone writes the brief itself from your goals, your updates (synced or not) and the last scan's summaries. No tools are read. It uses the server's own brief rules, cached on the phone, with the same OpenRouter key and model, so it reads like any other brief. Without a key, or if the AI fails within 60 seconds, you get a plain brief in the same layout. Offline drafts are labelled, and stored on the server as they are once it's back, without spending the daily tool budget. The app then asks for today's real brief once.
+- **Earlier editions:** swipe a brief left to delete it, or use Delete all. The server archives them rather than deleting, and deletes made offline are queued.
 - **Status:** Settings → Server shows the machine's name and whether it's online. The app checks every 30 seconds, so a lost connection can take up to about 40 seconds to show. Expand it to see the full address and token.
 - **Reconnect:** the app checks for your server every 10 seconds while offline. When it's back, it sends what's queued and fetches anything new, such as briefs written on schedule.
-- **Needs your server:** writing a new brief, and changing schedules, tools or keys.
+- **Needs your server:** reading your tools, Refetch, and changing schedules, tools, keys or the model.
 - **Can't save:** offline, a read that was never saved on this device, such as on first launch, shows an error with Try again.
 
 Saved content is stored in the app's own storage, or in the browser's on web, without extra encryption. "Disconnect this device" removes it.
@@ -200,8 +212,7 @@ Everything is optional. These are the variable names. Never commit their values.
 | Variable | Where | What it does |
 |---|---|---|
 | `COMPOSIO_API_KEY` | server | Composio key. You can add it in the app instead |
-| `OPENROUTER_API_KEY` | server | OpenRouter key, if OpenRouter is your provider |
-| `OLLAMA_API_KEY` | server | Only for Ollama's hosted `https://ollama.com` |
+| `OPENROUTER_API_KEY` | server | OpenRouter key. You can add it in the app instead |
 | `OS_MODEL` | server | OpenRouter model until you choose one in Settings |
 | `OS_COMPOSIO_USER_ID` | server | Composio user ID, if your accounts already exist under another |
 | `OS_TOKEN` | server | Fixes the server token instead of generating one |
@@ -217,7 +228,7 @@ Schedules only run while the server is running, and a brief missed during downti
 ## Project layout
 
 ```
-server/   Hono API, SQLite, scheduler, Composio, OpenRouter and Ollama. Also hosts the web app.
+server/   Hono API, SQLite, scheduler, Composio and OpenRouter. Also hosts the web app.
 app/      Expo app for web, iOS and Android.
 ```
 
@@ -250,6 +261,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 - One person per server. There are no user accounts.
 - Android builds haven't been tested yet. Web and iOS have.
 - The default AI model is very cheap and can misjudge goal status, so check it before acting. Choose a better one in Settings.
+- Offline briefs don't read your tools, so they only know what the last scan saw.
 - No push notifications yet, so you open the app to read a scheduled brief.
 - Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. A tool that fails is named in the brief.
 - Calendars cover this week only, through Sunday, so next week's meetings don't appear until Monday. Email covers your last 5 from the last 3 days.

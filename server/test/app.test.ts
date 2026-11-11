@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.ts';
 import { endOfWeek, toolkitBySlug } from '../src/collectors.ts';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/composio.ts';
-import { createOllamaComposer, createOpenRouterComposer, describeComposeError, listOllamaModels, listOpenRouterModels, OllamaError, extractNote, extractSourceSummaries, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
+import { createOpenRouterComposer, describeComposeError, listOpenRouterModels, extractNote, extractSourceSummaries, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/db.ts';
 import { redact } from '../src/redact.ts';
@@ -104,10 +104,12 @@ describe('credentials', () => {
 describe('choosing a model', () => {
   const input: BriefInput = { kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} };
 
-  it('writes with the provider and model you chose, and switches back', async () => {
+  it('writes with the OpenRouter model you chose', async () => {
     const seen: unknown[] = [];
     const dir = mkdtempSync(join(tmpdir(), 'os-test-'));
     const store = new Store(join(dir, 'os.db'), randomBytes(32));
+    // A server that was set to Ollama before it was removed goes back to OpenRouter.
+    store.setSetting('ai_provider', 'ollama');
     const { app } = createApp({
       store, token: TOKEN, env: { OPENROUTER_API_KEY: 'sk-or-test-key' }, createGateway: () => fakeGateway().gateway, now: () => NOW,
       createComposer: (config) => { seen.push(config); return async () => '# Good morning'; },
@@ -115,111 +117,68 @@ describe('choosing a model', () => {
     const call = (path: string, method = 'GET', body?: unknown) => app.request(path, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${TOKEN}` }, ...(body ? { body: JSON.stringify(body) } : {}) });
 
     expect((await (await call('/api/status')).json()).provider).toBe('openrouter');
-    expect((await call('/api/ai', 'PUT', { provider: 'ollama', model: 'phonon:latest' })).status).toBe(200);
-    await call('/api/briefs', 'POST', { kind: 'morning' });
-    expect(seen.at(-1)).toEqual({ provider: 'ollama', baseUrl: 'http://127.0.0.1:11434', apiKey: null, model: 'phonon:latest' });
-
-    await call('/api/ai', 'PUT', { provider: 'openrouter', model: 'a/b' });
+    expect((await call('/api/ai', 'PUT', { model: 'a/b' })).status).toBe(200);
     await call('/api/briefs', 'POST', { kind: 'morning' });
     expect(seen.at(-1)).toEqual({ provider: 'openrouter', apiKey: 'sk-or-test-key', model: 'a/b' });
-    // Each provider remembers its own model.
-    expect(await (await call('/api/status')).json()).toMatchObject({ provider: 'openrouter', model: 'a/b', ollamaModel: 'phonon:latest' });
+    expect(await (await call('/api/status')).json()).toMatchObject({ provider: 'openrouter', model: 'a/b' });
   });
 
-  it('refuses an empty model or a bad address', async () => {
+  it('refuses an empty model or another provider', async () => {
     const { call } = setup();
-    expect((await call('/api/ai', 'PUT', { provider: 'ollama', model: ' ' })).status).toBe(400);
-    expect((await call('/api/ai', 'PUT', { provider: 'ollama', model: 'm', ollamaUrl: 'file:///etc/passwd' })).status).toBe(400);
-    expect((await call('/api/ai', 'PUT', { provider: 'ollama', model: 'm', ollamaUrl: 'http://user:pw@host' })).status).toBe(400);
+    expect((await call('/api/ai', 'PUT', { provider: 'openrouter', model: ' ' })).status).toBe(400);
+    expect((await call('/api/ai', 'PUT', { provider: 'ollama', model: 'm' })).status).toBe(400);
     expect((await call('/api/ai', 'PUT', { provider: 'anthropic', model: 'm' })).status).toBe(400);
   });
 
-  it('keeps the Ollama key secret, showing only its end', async () => {
-    const { call } = setup();
-    await call('/api/credentials/ollama', 'PUT', { apiKey: 'ollama-secret-key-1234' });
-    const text = await (await call('/api/status')).text();
-    expect(text).not.toContain('ollama-secret-key');
-    expect(JSON.parse(text)).toMatchObject({ ollama: 'saved', ollamaHint: '1234' });
-    await call('/api/credentials/ollama', 'DELETE');
-    expect((await (await call('/api/status')).json()).ollama).toBeNull();
+  it('hands the OpenRouter key to a signed-in device, so the phone can use it offline', async () => {
+    const { app, call } = setup();
+    expect((await call('/api/credentials/openrouter')).status).toBe(404);
+    await call('/api/credentials/openrouter', 'PUT', { apiKey: 'sk-or-shared-key-9876' });
+    const status = await (await call('/api/status')).text();
+    expect(status).not.toContain('sk-or-shared-key');
+    const response = await call('/api/credentials/openrouter');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toEqual({ apiKey: 'sk-or-shared-key-9876' });
+    expect((await app.request('/api/credentials/openrouter')).status).toBe(401);
   });
 
-  it('calls Ollama with enough context, and only sends the key over https', async () => {
-    const bodies: Array<{ url: string; body: { model: string; options: { num_ctx: number } }; auth: unknown }> = [];
-    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      bodies.push({ url: String(url), body: JSON.parse(String(init?.body)), auth: (init?.headers as Record<string, string>).Authorization });
-      return new Response(JSON.stringify({ message: { content: '<think>x</think># Good morning' }, done_reason: 'stop' }));
-    });
-    await expect(createOllamaComposer('http://127.0.0.1:11434', 'secret-key', 'm')(input)).resolves.toBe('# Good morning');
-    await createOllamaComposer('https://ollama.com', 'secret-key', 'm')(input);
-    spy.mockRestore();
-    expect(bodies[0]).toMatchObject({ url: 'http://127.0.0.1:11434/api/chat', auth: undefined, body: { model: 'm' } });
-    expect(bodies[0]!.body.options.num_ctx).toBeGreaterThan(8000);
-    expect(bodies[1]).toMatchObject({ url: 'https://ollama.com/api/chat', auth: 'Bearer secret-key' });
-  });
-
-  it('explains Ollama failures in plain words', async () => {
-    let spy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ error: 'model not found' }), { status: 404 }));
-    expect(describeComposeError(await createOllamaComposer('http://x', null, 'm')(input).catch((e) => e))).toBe("Ollama doesn't have that model");
-    spy.mockRestore();
-    spy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
-    expect(describeComposeError(await createOllamaComposer('http://x', null, 'm')(input).catch((e) => e))).toBe("Ollama couldn't be reached");
-    spy.mockRestore();
-    expect(describeComposeError(new OllamaError(401, 'no'))).toContain('API key');
-    expect(describeComposeError(new OllamaError(402, 'not included'))).toBe("your Ollama plan doesn't include that model");
-    expect(describeComposeError(new OllamaError(400, '"x" does not support chat'))).toContain("can't write text");
-  });
-
-  it('falls back to a digest when Ollama is down', async () => {
-    const { call } = await connected();
-    await call('/api/ai', 'PUT', { provider: 'ollama', model: 'm', ollamaUrl: 'http://127.0.0.1:9' });
-    const brief = await (await call('/api/briefs', 'POST', { kind: 'morning' })).json();
-    expect(brief.generator).toBe('digest');
-    expect(brief.markdown).toContain("Ollama couldn't be reached");
-  });
-
-  it('marks which Ollama models leave your machine', async () => {
-    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ models: [{ name: 'phonon:latest' }, { name: 'glm-5:cloud' }, { name: 'gpt-oss:20b-cloud' }] })));
-    const local = await listOllamaModels('http://127.0.0.1:11434', null);
-    const remote = await listOllamaModels('https://ollama.com', 'k');
-    spy.mockRestore();
-    expect(local.map((m) => m.cloud)).toEqual([false, true, true]);
-    expect(remote.every((m) => m.cloud)).toBe(true);
-    expect(local[1]!.note).toContain('cloud');
-  });
-
-  it("leaves out local Ollama models that can't write", async () => {
-    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
-      if (String(url).endsWith('/api/tags')) return new Response(JSON.stringify({ models: [{ name: 'voice:latest' }, { name: 'writer:latest' }, { name: 'glm-5:cloud' }] }));
-      return new Response(JSON.stringify({ capabilities: JSON.parse(String(init?.body)).model === 'voice:latest' ? ['speech'] : ['completion'] }));
-    });
-    const models = await listOllamaModels('http://127.0.0.1:11434', null);
-    spy.mockRestore();
-    expect(models.map((m) => m.id)).toEqual(['writer:latest', 'glm-5:cloud']);
-  });
-
-  it('lists OpenRouter models cheapest first, leaving out unknown prices', async () => {
+  it('lists OpenRouter models cheapest first, leaving out unknown prices and ones that can\'t write a brief', async () => {
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ data: [
       { id: 'dear', pricing: { prompt: '0.00001', completion: '0.00003' } },
       { id: 'cheap', pricing: { prompt: '0.0000001', completion: '0.0000003' } },
       { id: 'free', pricing: { prompt: '0', completion: '0' } },
       { id: 'router', pricing: { prompt: '-1', completion: '-1' } },
+      { id: 'tiny', context_length: 8000, pricing: { prompt: '0.0000001', completion: '0.0000001' } },
+      { id: 'painter', architecture: { output_modalities: ['image'] }, pricing: { prompt: '0.0000001', completion: '0.0000001' } },
     ] })));
     const models = await listOpenRouterModels('k');
     spy.mockRestore();
     expect(models.map((m) => m.id)).toEqual(['free', 'cheap', 'dear']);
-    expect(models[0]!.note).toBe('Free');
+    expect(models[0]!.note).toContain('Free');
     expect(models[2]!.note).toBe('$10.00 in, $30.00 out, per million tokens');
   });
 
-  it('asks for a key before listing OpenRouter models, and reports a down Ollama', async () => {
+  it('recommends cheap models that write well, but not pricey or free ones', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify({ data: [
+      { id: 'qwen/qwen3-30b-a3b-instruct-2507', pricing: { prompt: '0.00000008', completion: '0.00000033' } },
+      { id: 'deepseek/deepseek-chat-v3.1', pricing: { prompt: '0.0000002', completion: '0.0000008' } },
+      { id: 'openai/gpt-5-mini', pricing: { prompt: '0.00000025', completion: '0.000002' } },
+      { id: 'openai/gpt-5', pricing: { prompt: '0.00000125', completion: '0.00001' } },
+      { id: 'qwen/qwen3-30b-a3b:free', pricing: { prompt: '0', completion: '0' } },
+      { id: 'some/unknown-model', pricing: { prompt: '0.0000001', completion: '0.0000001' } },
+    ] })));
+    const models = await listOpenRouterModels('k');
+    spy.mockRestore();
+    const recommended = models.filter((m) => m.recommended).map((m) => m.id);
+    expect(recommended).toEqual(['qwen/qwen3-30b-a3b-instruct-2507', 'deepseek/deepseek-chat-v3.1', 'openai/gpt-5-mini']);
+    expect(models.map((m) => m.price)).toEqual([...models.map((m) => m.price)].sort((a, b) => a - b));
+  });
+
+  it('asks for a key before listing OpenRouter models', async () => {
     const { call } = setup();
     expect(await (await call('/api/ai/models?provider=openrouter')).json()).toMatchObject({ models: [], error: expect.stringContaining('key') });
-    const spy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'));
-    const down = await (await call('/api/ai/models?provider=ollama&url=http%3A%2F%2F127.0.0.1%3A9')).json();
-    spy.mockRestore();
-    expect(down.error).toContain('http://127.0.0.1:9');
-    expect((await call('/api/ai/models?provider=nope')).status).toBe(400);
+    expect(await (await call('/api/ai/models')).json()).toMatchObject({ models: [] });
+    expect((await call('/api/ai/models?provider=ollama')).status).toBe(400);
   });
 });
 

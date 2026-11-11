@@ -3,12 +3,15 @@ import type { BriefPrompt } from './offlineBrief';
 
 export type Kind = 'morning' | 'evening';
 
-export type Provider = 'openrouter' | 'ollama';
+export type Provider = 'openrouter';
 
 export interface ModelOption {
   id: string;
   note: string | null;
-  cloud: boolean;
+  /** Cheap, and known to write a good brief. Missing from servers older than this app. */
+  recommended?: boolean;
+  /** Dollars per million tokens, in plus out. */
+  price?: number;
 }
 
 export interface Status {
@@ -20,11 +23,7 @@ export interface Status {
   openrouterHint: string | null;
   /** The rest are missing from a status saved before servers reported them. */
   provider?: Provider;
-  ollama?: 'environment' | 'saved' | null;
-  ollamaHint?: string | null;
   openrouterModel?: string;
-  ollamaModel?: string;
-  ollamaUrl?: string;
   model: string;
   timezone: string | null;
   selectedToolkits: string[];
@@ -160,10 +159,11 @@ export function createApi({ url, token }: Connection) {
     ping: (timeoutMs = PROBE_TIMEOUT_MS) => request<Status>('/status', 'GET', undefined, timeoutMs),
     saveComposioKey: (apiKey: string) => request('/credentials/composio', 'PUT', { apiKey }),
     saveOpenRouterKey: (apiKey: string) => request('/credentials/openrouter', 'PUT', { apiKey }),
-    saveOllamaKey: (apiKey: string) => request('/credentials/ollama', 'PUT', { apiKey }),
-    removeCredential: (name: 'composio' | 'openrouter' | 'ollama') => request(`/credentials/${name}`, 'DELETE'),
-    saveAi: (input: { provider: Provider; model: string; ollamaUrl?: string }) => request('/ai', 'PUT', input),
-    aiModels: (provider: Provider, url?: string) => request<{ models: ModelOption[]; error: string | null }>(`/ai/models?provider=${provider}${url ? `&url=${encodeURIComponent(url)}` : ''}`),
+    /** The saved OpenRouter key itself, so the phone can keep the same key for writing offline. */
+    openRouterKey: () => request<{ apiKey: string }>('/credentials/openrouter'),
+    removeCredential: (name: 'composio' | 'openrouter') => request(`/credentials/${name}`, 'DELETE'),
+    saveAi: (model: string) => request('/ai', 'PUT', { provider: 'openrouter', model }),
+    aiModels: () => request<{ models: ModelOption[]; error: string | null }>('/ai/models?provider=openrouter'),
     toolkits: (fresh = false) => request<{ toolkits: Toolkit[]; error: string | null; needsAuth: boolean }>(`/toolkits${fresh ? '?fresh=1' : ''}`),
     selectToolkits: (slugs: string[]) => request('/toolkits/selection', 'PUT', { slugs }),
     connectToolkit: (slug: string) => request<{ redirectUrl: string | null }>(`/toolkits/${slug}/connect`, 'POST'),

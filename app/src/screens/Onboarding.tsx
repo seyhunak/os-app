@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Linking, Platform } from 'react-native';
 import { COMPOSIO_URL, createApi, deviceTimezone, normalizeServerUrl, type Api, type Brief, type Status, type Toolkit } from '../api';
-import { saveConnection, type Connection } from '../storage';
+import { saveConnection, savePhoneAiKey, type Connection } from '../storage';
 import { ToolList } from '../ToolList';
 import { Body, Button, ErrorNote, Field, message, Screen, Title } from '../ui';
 
@@ -103,7 +103,11 @@ export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: St
     setError(null);
     try {
       if (goals.trim()) await api.saveGoals(goals);
-      if (openRouterKey.trim()) await api.saveOpenRouterKey(openRouterKey.trim());
+      if (openRouterKey.trim()) {
+        await api.saveOpenRouterKey(openRouterKey.trim());
+        // The same key writes briefs on this phone when the server is out of reach.
+        if (Platform.OS !== 'web') await savePhoneAiKey(openRouterKey.trim()).catch(() => undefined);
+      }
       await api.saveTimezone(deviceTimezone());
       onDone(await api.generateBrief('morning'));
     } catch (e) {

@@ -4,21 +4,36 @@ export const SOURCES_MARKER = '{{SOURCES}}';
 export const DEFAULT_MODEL = 'qwen/qwen3-30b-a3b-instruct-2507';
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 const REQUEST_TIMEOUT_MS = 180_000;
-/** A model running on your own machine can be much slower than a hosted one. */
-const OLLAMA_TIMEOUT_MS = 600_000;
-/** Ollama's default context is small enough to silently cut a brief's prompt short. */
-const OLLAMA_CONTEXT_TOKENS = 32_768;
-export const DEFAULT_OLLAMA_URL = 'http://127.0.0.1:11434';
-export type Provider = 'openrouter' | 'ollama';
-export type AiConfig =
-  | { provider: 'openrouter'; apiKey: string; model: string }
-  | { provider: 'ollama'; baseUrl: string; apiKey: string | null; model: string };
+export type Provider = 'openrouter';
+export interface AiConfig { provider: 'openrouter'; apiKey: string; model: string }
 export interface ModelOption {
   id: string;
   note: string | null;
-  /** True if this model runs on someone else's servers rather than yours. */
-  cloud: boolean;
+  /** Cheap, and known to write a good brief. */
+  recommended: boolean;
+  /** Dollars per million tokens, prompt plus completion. */
+  price: number;
 }
+/** A brief's prompt can be long, so smaller windows cut it short. */
+const MIN_CONTEXT_TOKENS = 32_000;
+/** Above this, per million tokens in and out together, a model isn't "cheap". */
+const CHEAP_PRICE = 3;
+/**
+ * Families that follow the brief's layout well for little money. Matched against the model id, and
+ * only counted as recommended when also under CHEAP_PRICE, so a pricey variant isn't flagged.
+ */
+const GOOD_CHEAP = [
+  /^qwen\/qwen3-(30b-a3b|235b-a22b|next-80b-a3b)(-instruct)?(-2507)?$/,
+  /^deepseek\/deepseek-(chat-v3|v3\.\d)/,
+  /^google\/gemini-2\.\d-flash(-lite)?(-\d+)?$/,
+  /^google\/gemini-3(\.\d)?-flash/,
+  /^openai\/gpt-(4\.1|5(\.\d)?)-(mini|nano)$/,
+  /^openai\/gpt-oss-(120b|20b)$/,
+  /^mistralai\/mistral-small-3\.\d/,
+  /^meta-llama\/llama-4-(maverick|scout)$/,
+  /^z-ai\/glm-4\.\d-air$/,
+  /^moonshotai\/kimi-k2/,
+];
 /** Caps what one brief can cost, since the key has a budget. */
 const MAX_OUTPUT_TOKENS = 4000;
 
@@ -152,12 +167,6 @@ export class OpenRouterError extends Error {
   }
 }
 
-export class OllamaError extends Error {
-  constructor(readonly status: number, message: string) {
-    super(message);
-  }
-}
-
 interface ChatCompletion {
   choices?: Array<{ finish_reason?: string; message?: { content?: string | null } }>;
   error?: { message?: string; code?: number };
@@ -194,85 +203,43 @@ export function createOpenRouterComposer(apiKey: string, model: string): Compose
   };
 }
 
-/** Saved keys only travel over https. A local Ollama doesn't need one, and shouldn't receive it. */
-const ollamaHeaders = (baseUrl: string, apiKey: string | null): Record<string, string> =>
-  apiKey && baseUrl.startsWith('https://') ? { Authorization: `Bearer ${apiKey}` } : {};
-
-export function createOllamaComposer(baseUrl: string, apiKey: string | null, model: string): Composer {
-  return async (input) => {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...ollamaHeaders(baseUrl, apiKey) },
-      signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
-      body: JSON.stringify({
-        model,
-        stream: false,
-        think: false,
-        options: { num_ctx: OLLAMA_CONTEXT_TOKENS, num_predict: MAX_OUTPUT_TOKENS },
-        messages: [
-          { role: 'system', content: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}` },
-          { role: 'user', content: renderUserPrompt(input) },
-        ],
-      }),
-    }).catch((error: Error) => {
-      throw new Error(error.name === 'TimeoutError' ? 'Ollama took too long to answer' : "Ollama couldn't be reached");
-    });
-    const data = (await response.json().catch(() => ({}))) as { error?: string; done_reason?: string; message?: { content?: string } };
-    if (!response.ok || data.error) throw new OllamaError(response.status, data.error ?? `HTTP ${response.status}`);
-    if (data.done_reason === 'length') throw new Error('the AI model ran out of output tokens');
-    const text = (data.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-    if (!text) throw new Error('the AI model returned an empty brief');
-    return text;
-  };
-}
-
-export const createComposer = (config: AiConfig): Composer =>
-  config.provider === 'ollama'
-    ? createOllamaComposer(config.baseUrl, config.apiKey, config.model)
-    : createOpenRouterComposer(config.apiKey, config.model);
+export const createComposer = (config: AiConfig): Composer => createOpenRouterComposer(config.apiKey, config.model);
 
 const perMillion = (price: unknown) => {
   const value = Number(price) * 1_000_000;
   return value >= 100 ? value.toFixed(0) : value >= 1 ? value.toFixed(2) : value.toPrecision(2);
 };
 
-/** Only what the key's own guardrails allow, cheapest first. */
+interface OpenRouterModel {
+  id: string;
+  context_length?: number;
+  pricing?: { prompt?: string; completion?: string };
+  architecture?: { output_modalities?: string[] };
+}
+
+export const isRecommended = (id: string, price: number) => price > 0 && price <= CHEAP_PRICE && GOOD_CHEAP.some((pattern) => pattern.test(id));
+
+/**
+ * Only what the key's own guardrails allow, cheapest first. Models that can't write text, or whose
+ * window is too small for a brief, are left out. Cheap models that write well are marked.
+ */
 export async function listOpenRouterModels(apiKey: string): Promise<ModelOption[]> {
   const response = await fetch(`${OPENROUTER_URL}/models/user`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
   if (!response.ok) throw new OpenRouterError(response.status, `HTTP ${response.status}`);
-  const { data } = (await response.json()) as { data?: Array<{ id: string; pricing?: { prompt?: string; completion?: string } }> };
-  const cost = (m: { pricing?: { prompt?: string; completion?: string } }) => Number(m.pricing?.prompt ?? 0) + Number(m.pricing?.completion ?? 0);
+  const { data } = (await response.json()) as { data?: OpenRouterModel[] };
+  const cost = (m: OpenRouterModel) => (Number(m.pricing?.prompt ?? 0) + Number(m.pricing?.completion ?? 0)) * 1_000_000;
   return (data ?? [])
     // A negative price means OpenRouter routes it to a model chosen later, so the cost isn't known.
     .filter((m) => cost(m) >= 0)
-    .sort((a, b) => cost(a) - cost(b))
+    .filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('text'))
+    .filter((m) => !m.context_length || m.context_length >= MIN_CONTEXT_TOKENS)
+    .sort((a, b) => cost(a) - cost(b) || a.id.localeCompare(b.id))
     .map((m) => ({
       id: m.id,
-      note: cost(m) === 0 ? 'Free' : `$${perMillion(m.pricing?.prompt)} in, $${perMillion(m.pricing?.completion)} out, per million tokens`,
-      cloud: true,
+      note: cost(m) === 0 ? 'Free, but often rate limited' : `$${perMillion(m.pricing?.prompt)} in, $${perMillion(m.pricing?.completion)} out, per million tokens`,
+      recommended: isRecommended(m.id, cost(m)),
+      price: cost(m),
     }));
-}
-
-export const isOllamaCloud = (baseUrl: string, model: string) => /[:-]cloud$/i.test(model) || !/^http:\/\/(127\.0\.0\.1|localhost|\[::1\])[:/]/.test(`${baseUrl}/`);
-
-export async function listOllamaModels(baseUrl: string, apiKey: string | null): Promise<ModelOption[]> {
-  const response = await fetch(`${baseUrl}/api/tags`, { headers: ollamaHeaders(baseUrl, apiKey), signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new OllamaError(response.status, `HTTP ${response.status}`);
-  const { models } = (await response.json()) as { models?: Array<{ name: string }> };
-  const options = (models ?? []).map(({ name }) => {
-    const cloud = isOllamaCloud(baseUrl, name);
-    return { id: name, note: cloud ? "Runs in Ollama's cloud, so your tool data is sent there" : 'Runs on your own machine', cloud };
-  });
-  // Some local models only do speech or embeddings, so they can't write a brief.
-  const canWrite = await Promise.all(options.map(async ({ id, cloud }) => {
-    if (cloud) return true;
-    const shown = await fetch(`${baseUrl}/api/show`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: id }), signal: AbortSignal.timeout(15_000) })
-      .then((r) => r.json() as Promise<{ capabilities?: string[] }>)
-      .catch(() => null);
-    return !shown?.capabilities || shown.capabilities.includes('completion');
-  }));
-  // Models that keep your data on your machine come first.
-  return options.filter((_, i) => canWrite[i]).sort((a, b) => Number(a.cloud) - Number(b.cloud));
 }
 
 export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
@@ -284,15 +251,6 @@ export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
 }
 
 export function describeComposeError(error: unknown): string {
-  if (error instanceof OllamaError) {
-    if (error.status === 401 || error.status === 403) return 'Ollama rejected the request, so check its API key';
-    if (error.status === 400 && /does not support/i.test(error.message)) return "that Ollama model can't write text, so choose another";
-    if (error.status === 402) return "your Ollama plan doesn't include that model";
-    if (error.status === 404) return "Ollama doesn't have that model";
-    if (error.status === 410) return 'Ollama has retired that model, so choose another';
-    if (error.status === 429) return 'Ollama is rate limiting this account';
-    return `Ollama returned an error (${error.status})`;
-  }
   if (error instanceof OpenRouterError) {
     if (error.status === 401) return 'the OpenRouter API key was rejected';
     if (error.status === 403 && /injection/i.test(error.message)) return "your OpenRouter guardrail flagged possible prompt injection in today's tool data";

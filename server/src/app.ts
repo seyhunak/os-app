@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { BriefService, selectedToolkits } from './briefs.ts';
 import { TOOLKITS, toolkitBySlug } from './collectors.ts';
 import type { ComposioGateway, ConnectedAccount } from './composio.ts';
-import { briefPrompt, createComposer, DEFAULT_MODEL, DEFAULT_OLLAMA_URL, describeComposeError, listOllamaModels, listOpenRouterModels, OllamaError, type AiConfig, type Composer, type ModelOption, type Provider } from './compose.ts';
+import { briefPrompt, createComposer, DEFAULT_MODEL, listOpenRouterModels, type AiConfig, type Composer, type ModelOption } from './compose.ts';
 import type { Schedule, Store } from './db.ts';
 import { redact } from './redact.ts';
 import { Scheduler } from './scheduler.ts';
@@ -17,7 +17,7 @@ import { Scheduler } from './scheduler.ts';
 export interface AppDeps {
   store: Store;
   token: string;
-  env: { COMPOSIO_API_KEY?: string; OPENROUTER_API_KEY?: string; OLLAMA_API_KEY?: string; OS_MODEL?: string };
+  env: { COMPOSIO_API_KEY?: string; OPENROUTER_API_KEY?: string; OS_MODEL?: string };
   createGateway(apiKey: string): ComposioGateway;
   createComposer?(config: AiConfig): Composer;
   verifyOpenRouterKey?(apiKey: string): Promise<void>;
@@ -39,15 +39,8 @@ const validTimezone = (tz: string) => {
 const Timezone = z.string().min(1).max(64).refine(validTimezone, 'Unknown timezone');
 const ApiKey = z.object({ apiKey: z.string().trim().min(8).max(512) });
 const Kind = z.enum(['morning', 'evening']);
-const ProviderName = z.enum(['openrouter', 'ollama']);
-const OllamaUrl = z.string().trim().max(300).refine((value) => {
-  try {
-    const url = new URL(value);
-    return (url.protocol === 'http:' || url.protocol === 'https:') && !url.username && !url.password;
-  } catch {
-    return false;
-  }
-}, 'Enter a full address, like http://127.0.0.1:11434').transform((value) => value.replace(/\/+$/, ''));
+// Only OpenRouter now. Older apps still send the provider, so it's accepted and ignored.
+const ProviderName = z.literal('openrouter');
 const ScheduleBody = z.object({
   kind: Kind,
   time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Use HH:MM'),
@@ -77,13 +70,8 @@ export function createApp(deps: AppDeps) {
   const { store, env } = deps;
   const composioKey = () => env.COMPOSIO_API_KEY || store.getSecret('composio');
   const openRouterKey = () => env.OPENROUTER_API_KEY || store.getSecret('openrouter');
-  const ollamaKey = () => env.OLLAMA_API_KEY || store.getSecret('ollama');
-  const provider = (): Provider => (store.getSetting('ai_provider') === 'ollama' ? 'ollama' : 'openrouter');
   const openRouterModel = () => store.getSetting('ai_model_openrouter') || env.OS_MODEL || DEFAULT_MODEL;
-  const ollamaModel = () => store.getSetting('ai_model_ollama') ?? '';
-  const ollamaUrl = () => store.getSetting('ollama_url') ?? DEFAULT_OLLAMA_URL;
   const aiConfig = (): AiConfig | null => {
-    if (provider() === 'ollama') return { provider: 'ollama', baseUrl: ollamaUrl(), apiKey: ollamaKey(), model: ollamaModel() };
     const apiKey = openRouterKey();
     return apiKey ? { provider: 'openrouter', apiKey, model: openRouterModel() } : null;
   };
@@ -152,17 +140,13 @@ export function createApp(deps: AppDeps) {
     machine: hostname().replace(/\.(local|lan|home)$/i, '').replace(/[-_]+/g, ' '),
     composio: credentialStatus(env.COMPOSIO_API_KEY, 'composio'),
     openrouter: credentialStatus(env.OPENROUTER_API_KEY, 'openrouter'),
-    ollama: credentialStatus(env.OLLAMA_API_KEY, 'ollama'),
-    provider: provider(),
-    model: provider() === 'ollama' ? ollamaModel() : openRouterModel(),
+    provider: 'openrouter',
+    model: openRouterModel(),
     openrouterModel: openRouterModel(),
-    ollamaModel: ollamaModel(),
-    ollamaUrl: ollamaUrl(),
     timezone: store.getSetting('timezone'),
-    // Only the end of each key is ever sent, so a device can show it's saved but can't read it.
+    // Only the end of each key is in the status. The OpenRouter key itself has its own route below.
     composioHint: lastFour(composioKey()),
     openrouterHint: lastFour(openRouterKey()),
-    ollamaHint: lastFour(ollamaKey()),
     selectedToolkits: selectedToolkits(store),
     hasBriefs: store.latestBrief() !== null,
     hasSchedules: store.listSchedules().length > 0,
@@ -193,50 +177,43 @@ export function createApp(deps: AppDeps) {
     return c.json({ openrouter: 'saved' });
   });
 
-  app.put('/api/credentials/ollama', async (c) => {
-    const { apiKey } = await parse(c, ApiKey);
-    store.setSecret('ollama', apiKey);
-    return c.json({ ollama: 'saved' });
+  /**
+   * The OpenRouter key itself, so the phone app can keep the same key in its Keychain and write
+   * briefs with AI while this server is out of reach. Needs the device token, like every route.
+   */
+  app.get('/api/credentials/openrouter', (c) => {
+    const apiKey = openRouterKey();
+    if (!apiKey) throw new HttpError(404, 'No OpenRouter key saved');
+    c.header('Cache-Control', 'no-store');
+    return c.json({ apiKey });
   });
 
   app.put('/api/ai', async (c) => {
-    const body = await parse(c, z.object({ provider: ProviderName, model: z.string().trim().min(1, 'Choose a model').max(200), ollamaUrl: OllamaUrl.optional() }));
-    store.setSetting('ai_provider', body.provider);
-    store.setSetting(`ai_model_${body.provider}`, body.model);
-    if (body.ollamaUrl) store.setSetting('ollama_url', body.ollamaUrl);
-    return c.json({ provider: body.provider, model: body.model });
+    const body = await parse(c, z.object({ provider: ProviderName.optional(), model: z.string().trim().min(1, 'Choose a model').max(200) }));
+    store.setSetting('ai_provider', 'openrouter');
+    store.setSetting('ai_model_openrouter', body.model);
+    return c.json({ provider: 'openrouter', model: body.model });
   });
 
   app.get('/api/ai/models', async (c) => {
-    const name = ProviderName.safeParse(c.req.query('provider'));
-    if (!name.success) throw new HttpError(400, 'Unknown provider');
+    const name = c.req.query('provider');
+    if (name !== undefined && !ProviderName.safeParse(name).success) throw new HttpError(400, 'Unknown provider');
     let models: ModelOption[] = [];
     let error: string | null = null;
-    if (name.data === 'ollama') {
-      // The address being typed, so its models show before it's saved.
-      const address = OllamaUrl.safeParse(c.req.query('url') ?? ollamaUrl());
-      if (!address.success) throw new HttpError(400, address.error.issues[0]?.message ?? 'Invalid address');
+    const key = openRouterKey();
+    if (key) {
       try {
-        models = await listOllamaModels(address.data, ollamaKey());
-      } catch (failure) {
-        error = failure instanceof OllamaError ? describeComposeError(failure) : `Couldn't reach Ollama at ${address.data}. Check that it's running, or type a model name.`;
+        models = await listOpenRouterModels(key);
+      } catch {
+        error = "Couldn't get your models from OpenRouter. You can still type a model name.";
       }
     } else {
-      const key = openRouterKey();
-      if (key) {
-        try {
-          models = await listOpenRouterModels(key);
-        } catch {
-          error = "Couldn't get your models from OpenRouter. You can still type a model name.";
-        }
-      } else {
-        error = 'Add your OpenRouter key above to see your models.';
-      }
+      error = 'Add your OpenRouter key above to see your models.';
     }
     return c.json({ models, error });
   });
 
-  app.delete('/api/credentials/:name{composio|openrouter|ollama}', (c) => {
+  app.delete('/api/credentials/:name{composio|openrouter}', (c) => {
     store.deleteSecret(c.req.param('name'));
     if (c.req.param('name') === 'composio') forgetAccounts();
     return c.json({ ok: true });
