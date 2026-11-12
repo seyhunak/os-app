@@ -9,7 +9,7 @@
 
 A short daily brief from your own tools: what matters, what to drop, and what to do next.
 
-OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses a cheap AI model through [OpenRouter](https://openrouter.ai) to rank what it finds against your goals, and writes a brief on a schedule you choose. You run the server yourself, and read your briefs on the web, iPhone or Android.
+OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses free AI models through [OpenRouter](https://openrouter.ai), with a cheap paid one as backup, to rank what it finds against your goals, and writes a brief on a schedule you choose. You run the server yourself, and read your briefs on the web, iPhone or Android.
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
@@ -140,18 +140,39 @@ If the newest brief on the Today screen is from yesterday or earlier, in your ph
 
 OS uses [OpenRouter](https://openrouter.ai) only. Ollama was removed, since its cloud models are no longer free and a local model is too slow for a brief on most machines.
 
-Go to **Settings → Model**, paste your OpenRouter key once, and pick a model. Your next brief uses it.
+Go to **Settings → Model**, paste your OpenRouter key once, and pick a paid model. Each brief tries free models first and uses yours only when none of them can write it (see [Free models first](#free-models-first)).
 
 - **Recommended first.** The list opens on one model per major lab (OpenAI, Google, Anthropic, DeepSeek, Qwen, Mistral, Meta, Z.ai, Moonshot, MiniMax, xAI): the cheapest general writing model of at least 14B parameters, under $3 per million tokens in and out. Coding, safety, image, audio and batch models are skipped. The rule picks up new models as they appear, with no list of names to maintain. The cheapest is marked "Best value".
 - **Cheapest to most expensive.** "Show all models" lists every model your key's guardrails allow, sorted by price, with the cost per million tokens in and out. Type to search them.
 - **Only models that can write a brief.** Models that output anything but text, batch-only models, and models with under 32K tokens of context are left out. A model with an unknown price is left out too.
-- **Free models are listed but not recommended.** They're often rate limited, and some keep prompts, which OS doesn't allow.
+- **Free models are listed but not recommended.** They're often rate limited, so OS tries them for you on every brief anyway, with your model as the backup.
 
-The default is `qwen/qwen3.7-flash`, at well under a cent per brief.
+The default paid model is `qwen/qwen3.7-flash`, at well under a cent per brief.
 
-- **Rate limits.** Cheap models are often served by one provider from a shared pool, which runs out for a few seconds at a time. When that happens, OS waits 2 seconds and tries again, letting OpenRouter fall back to the two recommended models closest in price, then waits 6 seconds and tries once more. A brief written by a fallback model says so under its title. Offline briefs on the phone retry the same way.
-- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 4,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked to keep it out of the answer instead.
+- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 4,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked for low effort and to keep it out of the answer. Some ignore that and think for 3,000 tokens or more anyway, so a free model like that gets 12,000 output tokens to finish in. Paid models always keep the 4,000 cap.
 - **Other failures.** You still get a plain brief that explains why, such as a model your guardrails don't allow.
+
+### Free models first
+
+Each brief tries models in this order until one writes it:
+
+1. **Free models your key allows**, up to five, from `GET /api/v1/models/user`, so your guardrails apply. Models from the labs above come first. Ones made for code or other single jobs, and ones under 14B parameters, are skipped. Like the recommended list, this is picked by rule, with no names to keep up to date.
+2. **`openrouter/free`**, OpenRouter's own router, which picks whichever free model is up. It's always tried, even if your models can't be listed.
+3. **Your model**, the paid one you chose in Settings.
+4. **Two paid fallbacks**, the recommended models closest to yours in price.
+
+How the chain behaves:
+
+- **Busy models are skipped at once.** A rate-limited, overloaded, slow or failed model hands over to the next one, with no wait. An answer that runs out of tokens, comes back empty, or is cut off partway (`finish_reason: "error"`) counts as a failure too.
+- **One more pass when everything was only busy.** If every model was just rate limited, OS waits 3 seconds and goes round once more. If anything else went wrong, it doesn't go round again.
+- **Some failures stop it at once.** A rejected key, or a guardrail that flags prompt injection, would fail the same way on every model, so nothing else is tried.
+- **Works with no credit.** Free models work on a key whose account has a $0 balance. Paid models need credit. Without it, OpenRouter answers them with 402.
+- **Free models have a daily limit.** OpenRouter allows 50 free requests a day on accounts that haven't bought credits. One brief uses up to six, and twice that if it goes round a second time.
+- **The same privacy rules apply.** Every request still asks for providers that don't keep or train on prompts (`provider: {data_collection: "deny"}`). Free models whose providers do aren't used.
+- **You can see who wrote it.** A brief written by any model other than yours says so under its title, such as "Written by baidu/ernie-5.5-flash-preview:free, a free model."
+- **The reason is given when every model fails.** You get a plain brief that says why, such as "the free models were busy or unavailable, and the OpenRouter key is out of credit or over its budget for paid models."
+
+The phone uses the same order for offline briefs, from a free model list it saves from the server's status (`freeModels` in `GET /api/status`). It goes round only once, so it can fall back to the plain brief within its 2 minute limit.
 
 ### One key, online and offline
 
@@ -200,7 +221,7 @@ Your server runs on your own machine, so it can be out of reach. Web and mobile 
 
 - **Read:** your last 30 briefs, goals, schedules and updates are saved on each device.
 - **Write:** updates, goal edits and brief deletes made offline go into a queue on the device and count as saved at once. Online, saving waits at most 4 seconds for the server, so a dead connection never hangs Save. The queue is sent oldest first, once each, when the server is back. Updates keep the time you wrote them. If two devices edit goals offline, the last one to sync wins.
-- **New briefs:** offline, the phone writes the brief itself from your goals, your updates (synced or not) and the last scan's summaries. No tools are read. It uses the server's own brief rules, cached on the phone, with the same OpenRouter key and model, so it reads like any other brief. Without a key, or if the AI fails within 60 seconds, you get a plain brief in the same layout. Offline drafts are labelled, and stored on the server as they are once it's back, without spending the daily tool budget. The app then asks for today's real brief once.
+- **New briefs:** offline, the phone writes the brief itself from your goals, your updates (synced or not) and the last scan's summaries. No tools are read. It uses the server's own brief rules, cached on the phone, with the same OpenRouter key and the same free-first order of models, so it reads like any other brief. Each free model gets 40 seconds. Without a key, or if no model writes it within 2 minutes, you get a plain brief in the same layout. Offline drafts are labelled, and stored on the server as they are once it's back, without spending the daily tool budget. The app then asks for today's real brief once.
 - **Earlier editions:** swipe a brief left to delete it, or use Delete all. The server archives them rather than deleting, and deletes made offline are queued.
 - **Status:** Settings → Server shows the machine's name and whether it's online. The app checks every 30 seconds, so a lost connection can take up to about 40 seconds to show. Expand it to see the full address and token.
 - **Reconnect:** the app checks for your server every 10 seconds while offline. When it's back, it sends what's queued and fetches anything new, such as briefs written on schedule.
@@ -264,7 +285,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 
 - One person per server. There are no user accounts.
 - Android builds haven't been tested yet. Web and iOS have.
-- The default AI model is very cheap and can misjudge goal status, so check it before acting. Choose a better one in Settings.
+- Free models and the default paid model are cheap and can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't yours.
 - Offline briefs don't read your tools, so they only know what the last scan saw.
 - No push notifications yet, so you open the app to read a scheduled brief.
 - Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. A tool that fails is named in the brief.
