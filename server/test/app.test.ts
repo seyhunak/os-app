@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app.ts';
 import { endOfWeek, toolkitBySlug } from '../src/collectors.ts';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/composio.ts';
-import { createOpenRouterComposer, describeComposeError, listOpenRouterModels, nearestRecommended, extractNote, extractSourceSummaries, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
+import { createOpenRouterComposer, describeComposeError, modelChain, pickFree, listOpenRouterModels, nearestRecommended, extractNote, extractSourceSummaries, renderDigest, renderUserPrompt, SOURCES_MARKER, type BriefInput, type Composer } from '../src/compose.ts';
 import { DatabaseSync } from 'node:sqlite';
 import { Store } from '../src/db.ts';
 import { redact } from '../src/redact.ts';
@@ -185,32 +185,53 @@ describe('choosing a model', () => {
     expect(models.map((m) => m.price)).toEqual([...models.map((m) => m.price)].sort((a, b) => a - b));
   });
 
-  it('retries a rate-limited model, then falls back to a recommended one and says so', async () => {
-    const sent: Array<{ model: string; models?: string[] }> = [];
-    const replies = [
-      new Response(JSON.stringify({ error: { code: 429, message: 'temporarily rate-limited upstream' } }), { status: 429 }),
-      new Response(JSON.stringify({ model: 'deepseek/deepseek-v4-flash', choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] })),
-    ];
+  it('tries free models first, then yours, then paid fallbacks, and names the one that wrote it', async () => {
+    const tried: string[] = [];
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
-      sent.push(JSON.parse(String(init?.body)));
-      return replies.shift()!;
+      const { model } = JSON.parse(String(init?.body)) as { model: string };
+      tried.push(model);
+      if (model === 'google/gemma-4-31b-it:free') return new Response(JSON.stringify({ error: { code: 429, message: 'temporarily rate-limited upstream' } }), { status: 429 });
+      return new Response(JSON.stringify({ model: 'baidu/ernie-5.5-flash-preview:free', choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] }));
     });
-    const waits: number[] = [];
-    const compose = createOpenRouterComposer('k', 'qwen/qwen3.7-flash', { fallbacks: async () => ['qwen/qwen3.7-flash', 'deepseek/deepseek-v4-flash', 'openai/gpt-oss-20b', 'z-ai/glm-5.3-flash'], sleep: async (ms) => { waits.push(ms); } });
+    const compose = createOpenRouterComposer('k', 'qwen/qwen3.7-flash', { freeModels: async () => ['google/gemma-4-31b-it:free', 'baidu/ernie-5.5-flash-preview:free', 'openrouter/free'], fallbacks: async () => ['deepseek/deepseek-v4-flash'] });
     const text = await compose(input);
     spy.mockRestore();
-    expect(sent[0]!.models).toBeUndefined();
-    expect(sent[1]!.models).toEqual(['qwen/qwen3.7-flash', 'deepseek/deepseek-v4-flash', 'openai/gpt-oss-20b']);
-    expect(waits).toEqual([2000]);
-    expect(text).toBe('# Good evening\n\n> Written by deepseek/deepseek-v4-flash, because qwen/qwen3.7-flash was rate limited by its provider.\n\nBody');
+    expect(tried).toEqual(['google/gemma-4-31b-it:free', 'baidu/ernie-5.5-flash-preview:free']);
+    expect(text).toBe('# Good evening\n\n> Written by baidu/ernie-5.5-flash-preview:free, a free model.\n\nBody');
   });
 
-  it('gives up after three rate-limited tries, and never retries a rejected key', async () => {
+  it('orders the chain: named free models, the free router, yours, then two paid fallbacks', () => {
+    expect(modelChain('a/one', ['f/x:free', 'openrouter/free', 'f/y:free'], ['a/one', 'b/two', 'c/three', 'd/four'])).toEqual(['f/x:free', 'f/y:free', 'openrouter/free', 'a/one', 'b/two', 'c/three']);
+    expect(modelChain('a/one', [], [])).toEqual(['openrouter/free', 'a/one']);
+  });
+
+  it('picks free general models, trusted labs first, and leaves out code, tiny and paid ones', () => {
+    expect(pickFree(['cohere/north-mini-code:free', 'baidu/ernie-5.5-flash-preview:free', 'google/gemma-4-31b-it:free', 'meta-llama/llama-3.2-3b-instruct:free', 'qwen/qwen3.7-flash', 'openrouter/free'])).toEqual(['google/gemma-4-31b-it:free', 'baidu/ernie-5.5-flash-preview:free', 'openrouter/free']);
+  });
+
+  it('falls to your paid model when every free one is busy, then reports the paid failure', async () => {
+    const tried: string[] = [];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const { model } = JSON.parse(String(init?.body)) as { model: string };
+      tried.push(model);
+      return model.endsWith('free')
+        ? new Response(JSON.stringify({ error: { code: 429, message: 'busy' } }), { status: 429 })
+        : new Response(JSON.stringify({ error: { code: 402, message: 'This request requires more credits' } }), { status: 402 });
+    });
+    const waits: number[] = [];
+    const error = await createOpenRouterComposer('k', 'm', { freeModels: async () => ['f/x:free'], fallbacks: async () => ['p/two'], sleep: async (ms) => { waits.push(ms); } })(input).catch((e) => e);
+    spy.mockRestore();
+    expect(tried).toEqual(['f/x:free', 'openrouter/free', 'm', 'p/two']);
+    expect(waits).toEqual([]);
+    expect(describeComposeError(error)).toBe('the free models were busy or unavailable, and the OpenRouter key is out of credit or over its budget for paid models');
+  });
+
+  it('goes round once more when every model was only busy, and never retries a rejected key', async () => {
     let calls = 0;
     let spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { calls++; return new Response(JSON.stringify({ error: { code: 429, message: 'busy' } }), { status: 429 }); });
     const error = await createOpenRouterComposer('k', 'm', { sleep: async () => undefined })(input).catch((e) => e);
     spy.mockRestore();
-    expect(calls).toBe(3);
+    expect(calls).toBe(4);
     expect(describeComposeError(error)).toContain('rate limiting');
     calls = 0;
     spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => { calls++; return new Response(JSON.stringify({ error: { code: 401, message: 'no' } }), { status: 401 }); });
@@ -636,14 +657,14 @@ describe('schedules', () => {
 
 describe('OpenRouter', () => {
   const input: BriefInput = { kind: 'morning', date: '2026-11-06', timezone: 'UTC', goals: 'Ship', previousNote: null, updates: [], sources: [], facts: {} };
-  const reply = (body: unknown, status = 200) => vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(body), { status }));
+  const reply = (body: unknown, status = 200) => vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(JSON.stringify(body), { status }));
   afterEach(() => vi.restoreAllMocks());
 
   it('sends no tools, caps output, skips data-collecting providers, and strips reasoning', async () => {
     const fetchMock = reply({ choices: [{ finish_reason: 'stop', message: { content: '<think>hmm</think># Good morning' } }] });
-    await expect(createOpenRouterComposer('sk-or-x', 'some/model')(input)).resolves.toBe('# Good morning');
+    await expect(createOpenRouterComposer('sk-or-x', 'some/model')(input)).resolves.toBe('> Written by openrouter/free, a free model.\n\n# Good morning');
     const body = JSON.parse(String(fetchMock.mock.calls[0]![1]!.body));
-    expect(body).toMatchObject({ model: 'some/model', max_tokens: 4000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
+    expect(body).toMatchObject({ model: 'openrouter/free', max_tokens: 4000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
     expect(body.tools).toBeUndefined();
   });
 
@@ -654,7 +675,7 @@ describe('OpenRouter', () => {
       new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '# Good morning' } }] })),
     ];
     const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return replies.shift()!; });
-    await expect(createOpenRouterComposer('k', 'm')(input)).resolves.toBe('# Good morning');
+    await expect(createOpenRouterComposer('k', 'm')(input)).resolves.toContain('# Good morning');
     spy.mockRestore();
     expect(bodies.map((b) => b.reasoning)).toEqual([{ enabled: false }, { exclude: true }]);
   });

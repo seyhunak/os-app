@@ -26,6 +26,8 @@ export interface Status {
   openrouterModel?: string;
   /** Recommended models to fall back to when yours is rate limited. */
   fallbackModels?: string[];
+  /** Free models to try first, best first. */
+  freeModels?: string[];
   model: string;
   timezone: string | null;
   selectedToolkits: string[];

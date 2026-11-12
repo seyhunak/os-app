@@ -279,6 +279,7 @@ export function createOfflineApi(connection: Connection) {
         prompt: await load<BriefPrompt>(`${prefix}:prompt`),
         apiKey: await loadPhoneAiKey(),
         model: status?.openrouterModel ?? status?.model ?? null,
+        freeModels: status?.freeModels ?? [],
         fallbacks: status?.fallbackModels ?? [],
       });
       const clientId = newClientId();

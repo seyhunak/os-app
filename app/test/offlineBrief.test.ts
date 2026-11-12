@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { Brief } from '../src/api';
 import { parseBrief } from '../src/parseBrief';
-import { renderUserPrompt, writeOfflineBrief, type BriefPrompt, type OfflineBriefInput } from '../src/offlineBrief';
+import { offlineModelChain, renderUserPrompt, writeOfflineBrief, type BriefPrompt, type OfflineBriefInput } from '../src/offlineBrief';
 
 const NOW = new Date(2026, 10, 8, 8, 0);
 const lastScan: Pick<Brief, 'sources' | 'createdAt' | 'markdown'> = {
@@ -74,50 +74,60 @@ describe('offline brief: plain template', () => {
 });
 
 describe('offline brief: AI on this device', () => {
-  it('calls OpenRouter with the cached rules, the phone key and no-training providers', async () => {
+  it('calls OpenRouter with the cached rules, the phone key and no-training providers, free model first', async () => {
     const { fetchImpl, calls } = fakeFetch({ content: '# Good morning\n### Focus\nShip it.\n### Signals\nNo signals today.\n### Sources\n{{SOURCES}}' });
-    const result = await writeOfflineBrief(input, { prompt, apiKey: 'sk-or-v1-test', model: 'cheap/model', fetchImpl });
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'sk-or-v1-test', model: 'cheap/model', freeModels: ['g/free-one:free', 'openrouter/free'], fetchImpl });
     assert.equal(result.generator, 'ai');
     assert.equal(calls.length, 1);
     assert.equal(calls[0].url, 'https://openrouter.ai/api/v1/chat/completions');
     assert.equal(calls[0].headers.Authorization, 'Bearer sk-or-v1-test');
-    assert.equal(calls[0].body.model, 'cheap/model');
+    assert.equal(calls[0].body.model, 'g/free-one:free');
     assert.deepEqual(calls[0].body.provider, { data_collection: 'deny' });
     const messages = calls[0].body.messages as Array<{ role: string; content: string }>;
     assert.equal(messages[0].content, 'RULES morning');
     assert.match(messages[1].content, /Fixed the offline save/);
     assert.match(result.markdown, /> Offline draft, written on this device/);
+    assert.match(result.markdown, /a free model/);
     assert.match(result.markdown, /\*\*Gmail:\*\*/);
   });
 
-  it('falls back to the template when OpenRouter errors', async () => {
-    const { fetchImpl } = fakeFetch({ status: 402 });
-    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'm', fetchImpl });
-    assert.equal(result.generator, 'digest');
-    assert.match(result.markdown, /OpenRouter returned an error \(402\)/);
+  it('orders free models, the free router, yours, then paid fallbacks', () => {
+    assert.deepEqual(offlineModelChain('a/one', ['f/x:free', 'openrouter/free', 'f/y:free'], ['a/one', 'b/two', 'c/three', 'd/four']), ['f/x:free', 'f/y:free', 'openrouter/free', 'a/one', 'b/two', 'c/three']);
   });
 
-  it('retries a rate-limited model with fallbacks, and names the one that wrote it', async () => {
-    const bodies: Array<{ models?: string[] }> = [];
-    const replies = [
-      new Response(JSON.stringify({ error: { code: 429, message: 'rate-limited upstream' } }), { status: 429 }),
-      new Response(JSON.stringify({ model: 'b/two', choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] })),
-    ];
-    const fetchImpl = (async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(String(init.body))); return replies.shift()!; }) as unknown as typeof fetch;
-    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'a/one', fallbacks: ['a/one', 'b/two', 'c/three'], fetchImpl, retryDelaysMs: [1, 1] });
+  it('tries every free model, then the paid one, and says the key is out of credit when that fails too', async () => {
+    const tried: string[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(String(init.body)) as { model: string };
+      tried.push(model);
+      return model.endsWith('free')
+        ? new Response(JSON.stringify({ error: { code: 429, message: 'rate-limited upstream' } }), { status: 429 })
+        : new Response(JSON.stringify({ error: { code: 402, message: 'requires more credits' } }), { status: 402 });
+    }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'a/one', freeModels: ['f/x:free'], fallbacks: ['b/two'], fetchImpl });
+    assert.deepEqual(tried, ['f/x:free', 'openrouter/free', 'a/one', 'b/two']);
+    assert.equal(result.generator, 'digest');
+    assert.match(result.markdown, /free models were busy or unavailable, and the OpenRouter key is out of credit/);
+  });
+
+  it('uses your paid model when every free one is busy, and says so', async () => {
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(String(init.body)) as { model: string };
+      return model.endsWith('free')
+        ? new Response(JSON.stringify({ error: { code: 429 } }), { status: 429 })
+        : new Response(JSON.stringify({ model, choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] }));
+    }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'a/one', freeModels: ['f/x:free'], fetchImpl });
     assert.equal(result.generator, 'ai');
-    assert.equal(bodies[0]!.models, undefined);
-    assert.deepEqual(bodies[1]!.models, ['a/one', 'b/two', 'c/three']);
-    assert.match(result.markdown, /Written by b\/two, because a\/one was rate limited/);
+    assert.doesNotMatch(result.markdown, /Written by/);
   });
 
-  it('says so when every try was rate limited', async () => {
+  it('stops at a rejected key', async () => {
     let calls = 0;
-    const fetchImpl = (async () => { calls++; return new Response(JSON.stringify({ error: { code: 429 } }), { status: 429 }); }) as unknown as typeof fetch;
-    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'm', fetchImpl, retryDelaysMs: [1, 1] });
-    assert.equal(calls, 3);
-    assert.equal(result.generator, 'digest');
-    assert.match(result.markdown, /rate limited/);
+    const fetchImpl = (async () => { calls++; return new Response(JSON.stringify({ error: { code: 401 } }), { status: 401 }); }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'm', freeModels: ['f/x:free'], fetchImpl });
+    assert.equal(calls, 1);
+    assert.match(result.markdown, /key was rejected/);
   });
 
   it("falls back when there's no internet at all", async () => {

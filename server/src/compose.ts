@@ -162,38 +162,56 @@ interface ChatCompletion {
   error?: { message?: string; code?: number };
 }
 
-/** Rate limits and busy providers pass. Anything else, such as a bad key, won't on a retry. */
+/** Busy or rate-limited providers usually free up within seconds, so a whole pass of these is worth one more go. */
 const isRetryable = (error: unknown) => error instanceof OpenRouterError && (error.status === 429 || error.status === 502 || error.status === 503);
-/** Waits before the second and third tries. Shared provider pools usually free up within seconds. */
-export const RETRY_DELAYS_MS = [2_000, 6_000];
-/** How many other models OpenRouter may fall back to, after the one you chose. */
-const FALLBACKS = 2;
+/** These fail the same way on every model, so trying the next one is pointless. */
+const stopsChain = (error: unknown) => error instanceof OpenRouterError && (error.status === 401 || (error.status === 403 && /injection/i.test(error.message)));
+/** Waits before a second pass, when every model in the first was only busy. */
+export const RETRY_DELAYS_MS = [3_000];
+/** How many paid models to try after yours, when it can't write the brief either. */
+const PAID_FALLBACKS = 2;
+/** At most this many free models are tried, so a busy day doesn't use up the key's free daily requests. */
+const MAX_FREE = 5;
+/** OpenRouter's own router, which picks whichever free model is up. Always tried after the named free models. */
+export const FREE_ROUTER = 'openrouter/free';
+/** Free models are often slow when busy, so they get less time than a paid one before the next is tried. */
+const FREE_TIMEOUT_MS = 90_000;
+
+const isFree = (id: string) => id.endsWith(':free') || id === FREE_ROUTER;
+
+/**
+ * Free models first, then yours, then paid fallbacks. Free models are rate limited often, and the
+ * key may have no credit for paid ones, so each is tried in turn until one writes the brief.
+ */
+export function modelChain(model: string, free: string[], paid: string[]): string[] {
+  const chain = [...free.filter((id) => id !== FREE_ROUTER).slice(0, MAX_FREE), FREE_ROUTER, model, ...paid.filter((id) => id !== model && !isFree(id)).slice(0, PAID_FALLBACKS)];
+  return [...new Set(chain)];
+}
 
 export interface ComposerOptions {
-  /** Other models to try when yours is rate limited, closest in price first. Only asked for on a failure. */
+  /** Free models to try before yours, best first. Only asked for once per brief. */
+  freeModels?: () => Promise<string[]>;
+  /** Paid models to try after yours, closest in price first. */
   fallbacks?: () => Promise<string[]>;
   sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * Writes with your model. If it's rate limited or busy, it waits and tries again, then lets
- * OpenRouter fall back to cheap recommended models. A brief written by a fallback says so.
+ * Tries free models first, then your model, then cheap paid fallbacks, until one writes the brief.
+ * A brief written by any model other than yours says which one wrote it.
  */
 export function createOpenRouterComposer(apiKey: string, model: string, options: ComposerOptions = {}): Composer {
   const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   return async (input) => {
     // Thinking would spend the output cap before the brief is written, so it's off. A few models
     // can't turn it off, so those are asked to keep it out of the answer instead.
-    let reasoning: Record<string, boolean> = { enabled: false };
-    const send = async (fallbacks: string[]): Promise<{ text: string; usedModel: string }> => {
+    const send = async (id: string, reasoning: Record<string, boolean> = { enabled: false }): Promise<{ text: string; usedModel: string }> => {
       const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(isFree(id) ? FREE_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
-          model,
-          // OpenRouter tries these in order when the first is rate limited or down.
-          ...(fallbacks.length ? { models: [model, ...fallbacks] } : {}),
+          model: id,
           max_tokens: MAX_OUTPUT_TOKENS,
           reasoning,
           // Tool data can include email, so skip providers that train on or keep prompts for that.
@@ -207,10 +225,7 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
       const data = (await response.json().catch(() => ({}))) as ChatCompletion & { model?: string };
       if (!response.ok || data.error) {
         const status = data.error?.code ?? response.status;
-        if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) {
-          reasoning = { exclude: true };
-          return send(fallbacks);
-        }
+        if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) return send(id, { exclude: true });
         throw new OpenRouterError(status, data.error?.message ?? `HTTP ${response.status}`);
       }
       const choice = data.choices?.[0];
@@ -218,26 +233,57 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
       if (choice?.finish_reason === 'length') throw new Error('the AI model ran out of output tokens');
       const text = (choice?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       if (!text) throw new Error('the AI model returned an empty brief');
-      return { text, usedModel: data.model ?? model };
+      return { text, usedModel: data.model ?? id };
     };
 
-    let fallbacks: string[] = [];
-    for (let attempt = 0; ; attempt++) {
-      try {
-        const { text, usedModel } = await send(fallbacks);
-        if (usedModel === model || !fallbacks.includes(usedModel)) return text;
-        const notice = `> Written by ${usedModel}, because ${model} was rate limited by its provider.`;
-        return /^# .*\n/.test(text) ? text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${text}`;
-      } catch (error) {
-        if (!isRetryable(error) || attempt >= RETRY_DELAYS_MS.length) throw error;
-        if (attempt === 0 && options.fallbacks) fallbacks = (await options.fallbacks().catch(() => [])).filter((id) => id !== model).slice(0, FALLBACKS);
-        await sleep(RETRY_DELAYS_MS[attempt]!);
+    const [free, paid] = await Promise.all([
+      options.freeModels?.().catch(() => [] as string[]) ?? [],
+      options.fallbacks?.().catch(() => [] as string[]) ?? [],
+    ]);
+    const chain = modelChain(model, free, paid);
+    const errors: unknown[] = [];
+    for (let pass = 0; ; pass++) {
+      errors.length = 0;
+      for (const id of chain) {
+        try {
+          const { text, usedModel } = await send(id);
+          if (usedModel === model) return text;
+          const why = isFree(id) ? 'a free model' : `because ${chain.slice(0, chain.indexOf(id)).includes(model) ? `${model} and the free models` : 'the free models'} couldn't write it`;
+          const notice = `> Written by ${usedModel}, ${why}.`;
+          return /^# .*\n/.test(text) ? text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${text}`;
+        } catch (error) {
+          if (stopsChain(error)) throw error;
+          errors.push(error);
+        }
       }
+      if (!errors.every(isRetryable) || pass >= RETRY_DELAYS_MS.length) break;
+      await sleep(RETRY_DELAYS_MS[pass]!);
     }
+    // The paid models' failure says most about why nothing worked, such as a key out of credit.
+    const paidError = errors.slice(chain.indexOf(model)).find((e) => e instanceof OpenRouterError && e.status !== 429) ?? errors.slice(chain.indexOf(model))[0];
+    throw new ChainError(paidError ?? errors.at(-1), errors.length);
   };
 }
 
-/** Recommended models nearest in price to yours, for when yours is rate limited. */
+/** Every model in the chain failed. Carries the error that best explains why. */
+export class ChainError extends Error {
+  constructor(readonly cause: unknown, readonly tried: number) {
+    super(cause instanceof Error ? cause.message : 'every AI model failed');
+  }
+}
+
+/** Free models the key's guardrails allow, best first: trusted labs, then the rest, then OpenRouter's free router. */
+export async function freeModels(apiKey: string): Promise<string[]> {
+  return pickFree((await listOpenRouterModels(apiKey)).map((m) => m.id));
+}
+
+export function pickFree(ids: string[]): string[] {
+  const named = ids.filter((id) => id.endsWith(':free') && !SPECIALIZED.test(id) && !tooSmall(id));
+  const trusted = named.filter((id) => TRUSTED_LABS.includes(lab(id)));
+  return [...trusted, ...named.filter((id) => !trusted.includes(id)), ...(ids.includes(FREE_ROUTER) ? [FREE_ROUTER] : [])];
+}
+
+/** Recommended models nearest in price to yours, for when yours can't write the brief. */
 export async function fallbackModels(apiKey: string, model: string): Promise<string[]> {
   const models = await listOpenRouterModels(apiKey);
   return nearestRecommended(models.filter((m) => m.recommended), model, models.find((m) => m.id === model)?.price);
@@ -251,8 +297,21 @@ export function nearestRecommended(recommended: Array<{ id: string; price: numbe
     .map((m) => m.id);
 }
 
-export const createComposer = (config: AiConfig): Composer =>
-  createOpenRouterComposer(config.apiKey, config.model, { fallbacks: () => fallbackModels(config.apiKey, config.model) });
+/** Lists the key's models once per brief, for both the free models and the paid fallbacks. */
+export const createComposer = (config: AiConfig, onModels?: (models: ModelOption[]) => void): Composer => {
+  let listing: Promise<ModelOption[]> | null = null;
+  const models = () => (listing ??= listOpenRouterModels(config.apiKey).then((list) => { onModels?.(list); return list; }));
+  return (input) => {
+    listing = null;
+    return createOpenRouterComposer(config.apiKey, config.model, {
+      freeModels: async () => pickFree((await models()).map((m) => m.id)),
+      fallbacks: async () => {
+        const list = await models();
+        return nearestRecommended(list.filter((m) => m.recommended), config.model, list.find((m) => m.id === config.model)?.price);
+      },
+    })(input);
+  };
+};
 
 const perMillion = (price: unknown) => {
   const value = Number(price) * 1_000_000;
@@ -311,12 +370,16 @@ export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
 }
 
 export function describeComposeError(error: unknown): string {
+  if (error instanceof ChainError) {
+    const reason = describeComposeError(error.cause);
+    return error.tried > 1 ? `the free models were busy or unavailable, and ${reason}` : reason;
+  }
   if (error instanceof OpenRouterError) {
     if (error.status === 401) return 'the OpenRouter API key was rejected';
     if (error.status === 403 && /injection/i.test(error.message)) return "your OpenRouter guardrail flagged possible prompt injection in today's tool data";
     if (error.status === 404 && /guardrail/i.test(error.message)) return "your OpenRouter guardrail doesn't allow this model";
-    if (error.status === 402) return 'the OpenRouter key is out of credit or over its budget';
-    if (error.status === 429) return "the model's provider is rate limiting it, and the fallback models were busy too. Try again in a minute, or choose another model in Settings";
+    if (error.status === 402) return 'the OpenRouter key is out of credit or over its budget for paid models';
+    if (error.status === 429) return "the model's provider is rate limiting it. Try again in a minute, or choose another model in Settings";
     return `OpenRouter returned an error (${error.status})`;
   }
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'TypeError')) return "OpenRouter couldn't be reached";

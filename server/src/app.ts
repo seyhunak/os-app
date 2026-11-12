@@ -9,7 +9,7 @@ import { z } from 'zod';
 import { BriefService, selectedToolkits } from './briefs.ts';
 import { TOOLKITS, toolkitBySlug } from './collectors.ts';
 import type { ComposioGateway, ConnectedAccount } from './composio.ts';
-import { briefPrompt, createComposer, DEFAULT_MODEL, listOpenRouterModels, nearestRecommended, type AiConfig, type Composer, type ModelOption } from './compose.ts';
+import { briefPrompt, createComposer, DEFAULT_MODEL, listOpenRouterModels, nearestRecommended, pickFree, type AiConfig, type Composer, type ModelOption } from './compose.ts';
 import type { Schedule, Store } from './db.ts';
 import { redact } from './redact.ts';
 import { Scheduler } from './scheduler.ts';
@@ -105,6 +105,18 @@ export function createApp(deps: AppDeps) {
       return [];
     }
   };
+  /** Kept so phones know which models to try offline, without listing them again. */
+  const saveModels = (models: ModelOption[]) => {
+    store.setSetting('recommended_models', JSON.stringify(models.filter((m) => m.recommended).map(({ id, price }) => ({ id, price }))));
+    store.setSetting('free_models', JSON.stringify(pickFree(models.map((m) => m.id))));
+  };
+  const savedFree = (): string[] => {
+    try {
+      return JSON.parse(store.getSetting('free_models') ?? '[]') as string[];
+    } catch {
+      return [];
+    }
+  };
   const lastFour = (key: string | null | undefined) => (key ? key.slice(-4) : null);
 
   const briefs = new BriefService({
@@ -113,7 +125,7 @@ export function createApp(deps: AppDeps) {
     accounts,
     composer: () => {
       const config = aiConfig();
-      return config ? (deps.createComposer ?? createComposer)(config) : null;
+      return config ? (deps.createComposer ? deps.createComposer(config) : createComposer(config, saveModels)) : null;
     },
     ...(deps.now ? { now: deps.now } : {}),
   });
@@ -153,6 +165,8 @@ export function createApp(deps: AppDeps) {
     openrouterModel: openRouterModel(),
     // For a phone writing offline when your model is rate limited. Empty until Settings has listed models.
     fallbackModels: savedFallbacks(),
+    // Tried first, offline too, since the key may have no credit for paid models.
+    freeModels: savedFree(),
     timezone: store.getSetting('timezone'),
     // Only the end of each key is in the status. The OpenRouter key itself has its own route below.
     composioHint: lastFour(composioKey()),
@@ -214,8 +228,7 @@ export function createApp(deps: AppDeps) {
     if (key) {
       try {
         models = await listOpenRouterModels(key);
-        // Kept so phones know which models to fall back to offline, without listing them again.
-        store.setSetting('recommended_models', JSON.stringify(models.filter((m) => m.recommended).map(({ id, price }) => ({ id, price }))));
+        saveModels(models);
       } catch {
         error = "Couldn't get your models from OpenRouter. You can still type a model name.";
       }
