@@ -122,6 +122,38 @@ describe('offline brief: AI on this device', () => {
     assert.doesNotMatch(result.markdown, /Written by/);
   });
 
+  it("gives a free model that can't turn thinking off room to finish, but keeps the cap on paid ones", async () => {
+    const bodies: Array<{ model: string; reasoning: unknown; max_tokens: number }> = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      bodies.push(body);
+      if (body.reasoning.enabled === false) return new Response(JSON.stringify({ error: { code: 400, message: 'Reasoning is mandatory' } }), { status: 400 });
+      return body.model === 'openrouter/free'
+        ? new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '' } }] }))
+        : new Response(JSON.stringify({ model: body.model, choices: [{ finish_reason: 'stop', message: { content: '# Good evening' } }] }));
+    }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'paid/m', fetchImpl });
+    assert.equal(result.generator, 'ai');
+    assert.deepEqual(bodies.map((b) => [b.model, b.reasoning, b.max_tokens]), [
+      ['openrouter/free', { enabled: false }, prompt.maxTokens],
+      ['openrouter/free', { effort: 'low', exclude: true }, 12000],
+      ['paid/m', { enabled: false }, prompt.maxTokens],
+      ['paid/m', { effort: 'low', exclude: true }, prompt.maxTokens],
+    ]);
+  });
+
+  it('moves on from a brief the provider cut off partway', async () => {
+    const tried: string[] = [];
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      const { model } = JSON.parse(String(init.body)) as { model: string };
+      tried.push(model);
+      return new Response(JSON.stringify({ model, choices: [{ finish_reason: model === 'f/x:free' ? 'error' : 'stop', message: { content: '# Good evening\n\nBody' } }] }));
+    }) as unknown as typeof fetch;
+    const result = await writeOfflineBrief(input, { prompt, apiKey: 'k-12345678', model: 'a/one', freeModels: ['f/x:free'], fetchImpl });
+    assert.deepEqual(tried, ['f/x:free', 'openrouter/free']);
+    assert.equal(result.generator, 'ai');
+  });
+
   it('stops at a rejected key', async () => {
     let calls = 0;
     const fetchImpl = (async () => { calls++; return new Response(JSON.stringify({ error: { code: 401 } }), { status: 401 }); }) as unknown as typeof fetch;

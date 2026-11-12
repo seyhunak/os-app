@@ -174,6 +174,11 @@ const PAID_FALLBACKS = 2;
 const MAX_FREE = 5;
 /** OpenRouter's own router, which picks whichever free model is up. Always tried after the named free models. */
 export const FREE_ROUTER = 'openrouter/free';
+/**
+ * Room for a free model that can't turn thinking off, which ignores effort and thinking caps and
+ * can think for 3,000+ tokens before writing. Free models cost nothing, so only paid ones keep the cap.
+ */
+const FREE_THINKING_TOKENS = 12_000;
 /** Free models are often slow when busy, so they get less time than a paid one before the next is tried. */
 const FREE_TIMEOUT_MS = 90_000;
 
@@ -205,14 +210,14 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
   return async (input) => {
     // Thinking would spend the output cap before the brief is written, so it's off. A few models
     // can't turn it off, so those are asked to keep it out of the answer instead.
-    const send = async (id: string, reasoning: Record<string, boolean> = { enabled: false }): Promise<{ text: string; usedModel: string }> => {
+    const send = async (id: string, reasoning: Record<string, boolean | string> = { enabled: false }): Promise<{ text: string; usedModel: string }> => {
       const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
         signal: AbortSignal.timeout(isFree(id) ? FREE_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           model: id,
-          max_tokens: MAX_OUTPUT_TOKENS,
+          max_tokens: reasoning.enabled === false || !isFree(id) ? MAX_OUTPUT_TOKENS : FREE_THINKING_TOKENS,
           reasoning,
           // Tool data can include email, so skip providers that train on or keep prompts for that.
           provider: { data_collection: 'deny' },
@@ -225,12 +230,14 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
       const data = (await response.json().catch(() => ({}))) as ChatCompletion & { model?: string };
       if (!response.ok || data.error) {
         const status = data.error?.code ?? response.status;
-        if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) return send(id, { exclude: true });
+        if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) return send(id, { effort: 'low', exclude: true });
         throw new OpenRouterError(status, data.error?.message ?? `HTTP ${response.status}`);
       }
       const choice = data.choices?.[0];
       if (choice?.finish_reason === 'content_filter') throw new Error('the AI model declined this brief');
       if (choice?.finish_reason === 'length') throw new Error('the AI model ran out of output tokens');
+      // The provider failed partway, so whatever came back is a partial brief.
+      if (choice?.finish_reason === 'error') throw new Error('the AI model stopped partway through');
       const text = (choice?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
       if (!text) throw new Error('the AI model returned an empty brief');
       return { text, usedModel: data.model ?? id };

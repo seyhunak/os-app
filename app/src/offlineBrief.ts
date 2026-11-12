@@ -106,8 +106,10 @@ interface Completion {
 
 const FREE_ROUTER = 'openrouter/free';
 const isFree = (id: string) => id.endsWith(':free') || id === FREE_ROUTER;
+/** Room for a free model that can't turn thinking off. It costs nothing, so only paid models keep the cap. */
+const FREE_THINKING_TOKENS = 12_000;
 /** A free model that's slow is usually overloaded, so the next one is tried after this long. */
-const FREE_ATTEMPT_MS = 30_000;
+const FREE_ATTEMPT_MS = 40_000;
 
 /** Free models first, then yours, then paid fallbacks. The same order the server uses. */
 export function offlineModelChain(model: string, free: string[], paid: string[]): string[] {
@@ -135,7 +137,7 @@ export async function writeOfflineBrief(input: OfflineBriefInput, ai: { prompt?:
       const timer = setTimeout(() => controller.abort(), isFree(id) ? Math.min(attemptMs, left) : left);
       try {
         // Thinking would spend the output cap before the brief is written, so it's off where the model allows.
-        let reasoning: Record<string, boolean> = { enabled: false };
+        let reasoning: Record<string, boolean | string> = { enabled: false };
         for (;;) {
           const response = await fetchImpl(`${OPENROUTER_URL}/chat/completions`, {
             method: 'POST',
@@ -143,7 +145,7 @@ export async function writeOfflineBrief(input: OfflineBriefInput, ai: { prompt?:
             headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
             body: JSON.stringify({
               model: id,
-              max_tokens: prompt.maxTokens,
+              max_tokens: reasoning.enabled === false || !isFree(id) ? prompt.maxTokens : FREE_THINKING_TOKENS,
               reasoning,
               provider: { data_collection: 'deny' },
               messages: [
@@ -155,12 +157,12 @@ export async function writeOfflineBrief(input: OfflineBriefInput, ai: { prompt?:
           const data = (await response.json().catch(() => ({}))) as Completion & { model?: string };
           const status = response.ok ? (data.error?.code ?? 200) : response.status;
           if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) {
-            reasoning = { exclude: true };
+            reasoning = { effort: 'low', exclude: true };
             continue;
           }
           const text = (data.choices?.[0]?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
           const finishReason = data.choices?.[0]?.finish_reason;
-          if (response.ok && !data.error && text && finishReason !== 'length' && finishReason !== 'content_filter') {
+          if (response.ok && !data.error && text && finishReason !== 'length' && finishReason !== 'content_filter' && finishReason !== 'error') {
             const used = data.model ?? id;
             const by = used === model ? '' : isFree(id) ? ` Written by ${used}, a free model.` : ` Written by ${used}, because the free models${chain.indexOf(id) > chain.indexOf(model) ? ` and ${model}` : ''} couldn't write it.`;
             const notice = `> Offline draft, written on this device. Tools weren't read, so sources are from the last scan.${by}`;

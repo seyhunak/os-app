@@ -668,16 +668,26 @@ describe('OpenRouter', () => {
     expect(body.tools).toBeUndefined();
   });
 
-  it("hides reasoning instead, for a model that can't turn it off", async () => {
-    const bodies: Array<{ reasoning: unknown }> = [];
-    const replies = [
-      new Response(JSON.stringify({ error: { code: 400, message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' } }), { status: 400 }),
-      new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '# Good morning' } }] })),
-    ];
-    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => { bodies.push(JSON.parse(String(init?.body))); return replies.shift()!; });
-    await expect(createOpenRouterComposer('k', 'm')(input)).resolves.toContain('# Good morning');
+  it("asks a model that can't turn thinking off for low effort, and gives a free one room to finish", async () => {
+    const bodies: Array<{ model: string; reasoning: unknown; max_tokens: number }> = [];
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      if (body.reasoning.enabled === false) return new Response(JSON.stringify({ error: { code: 400, message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' } }), { status: 400 });
+      return body.model.endsWith('free')
+        ? new Response(JSON.stringify({ choices: [{ finish_reason: 'length', message: { content: '' } }] }))
+        : new Response(JSON.stringify({ model: body.model, choices: [{ finish_reason: 'stop', message: { content: '# Good morning' } }] }));
+    });
+    await expect(createOpenRouterComposer('k', 'paid/m', { freeModels: async () => ['f/x:free'] })(input)).resolves.toBe('# Good morning');
     spy.mockRestore();
-    expect(bodies.map((b) => b.reasoning)).toEqual([{ enabled: false }, { exclude: true }]);
+    expect(bodies.map((b) => [b.model, b.reasoning, b.max_tokens])).toEqual([
+      ['f/x:free', { enabled: false }, 4000],
+      ['f/x:free', { effort: 'low', exclude: true }, 12000],
+      ['openrouter/free', { enabled: false }, 4000],
+      ['openrouter/free', { effort: 'low', exclude: true }, 12000],
+      ['paid/m', { enabled: false }, 4000],
+      ['paid/m', { effort: 'low', exclude: true }, 4000],
+    ]);
   });
 
   it('turns failures into clear reasons', async () => {
@@ -692,6 +702,8 @@ describe('OpenRouter', () => {
     expect(describeComposeError(model)).toContain("doesn't allow this model");
     reply({ choices: [{ finish_reason: 'length', message: { content: 'partial' } }] });
     await expect(createOpenRouterComposer('k', 'm')(input)).rejects.toThrow('ran out of output tokens');
+    reply({ choices: [{ finish_reason: 'error', message: { content: '# Good morning\n### Focus\nHalf' } }] });
+    await expect(createOpenRouterComposer('k', 'm')(input)).rejects.toThrow('stopped partway');
   });
 });
 
