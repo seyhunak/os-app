@@ -242,7 +242,7 @@ function ModelSection({ api, status, onChanged }: { api: OfflineApi; status: Sta
         </Text>
       ) : null}
       {matches.length ? (
-        <View style={{ gap: 0, borderWidth: 1, borderColor: c.line, borderRadius: 4, backgroundColor: c.card }}>
+        <View style={{ gap: 0, borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
           {matches.map((option, i) => (
             <Pressable
               key={option.id}

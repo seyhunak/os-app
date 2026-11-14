@@ -42,7 +42,7 @@ describe('model habits', () => {
 
   it("doesn't repeat signals under Left Out", () => {
     const parsed = parseBrief('### Signals\n- 🔥 [Sam] Contract redlines → Reply | Score: 88\n### Left Out\n- [Sam] Contract redlines → 88 | already included as signal\n- Digest → 40 | no goal\n- Other → 90 | Already listed');
-    expect(parsed.noise).toEqual([{ item: 'Digest', reason: 'no goal' }]);
+    expect(parsed.noise).toEqual([{ item: 'Digest', reason: 'no goal', score: 40 }]);
   });
 });
 
@@ -51,7 +51,7 @@ describe('new layout', () => {
     const parsed = parseBrief('### Signals\n- ⚡ [A] Low → x | Score: 61\n- 🔥 [B] High → y | Score: 90\n### Goals\n- ⚪ G\n### Sources\nx\n### Left Out\n- Noise → score 5 | spam\n### Note for Next Brief\nN');
     expect(parsed.structured).toBe(true);
     expect(parsed.priorities.map((p) => p.headline)).toEqual(['High', 'Low']);
-    expect(parsed.noise).toEqual([{ item: 'Noise', reason: 'spam' }]);
+    expect(parsed.noise).toEqual([{ item: 'Noise', reason: 'spam', score: 5 }]);
     expect(parsed.note).toBe('N');
   });
 });
@@ -88,7 +88,7 @@ Check the contract.`;
     const parsed = parseBrief(brief);
     expect(parsed.structured).toBe(true);
     expect(parsed.priorities.map((p) => p.headline)).toEqual(['Contract', 'Call']);
-    expect(parsed.noise).toEqual([{ item: 'Newsletter', reason: 'irrelevant' }]);
+    expect(parsed.noise).toEqual([{ item: 'Newsletter', reason: 'irrelevant', score: 40 }]);
     expect(parsed.goals[0]).toMatchObject({ goal: 'Ship', status: 'attention' });
     expect(parsed.sources).toContain('- **Gmail:** 2 items');
     expect(parsed.note).toBe('Check the contract.');

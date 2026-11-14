@@ -17,6 +17,8 @@ export interface Priority {
 export interface NoiseItem {
   item: string;
   reason: string | null;
+  /** The score that kept it below the cut, when the model wrote one. */
+  score: number | null;
 }
 
 export interface Goal {
@@ -115,8 +117,10 @@ export function parsePriority(line: string, knownSources: string[] = []): Priori
 
 function parseNoise(line: string): NoiseItem {
   const [item, ...rest] = clean(line).replace(/[[\]]/g, '').split(ARROW);
-  const reason = rest.join(' ').split('|').slice(1).join('|').replace(/^\s*reason:\s*/i, '').trim();
-  return { item: item!.trim(), reason: reason || null };
+  const [scored = '', ...why] = rest.join(' ').split('|');
+  const reason = why.join('|').replace(/^\s*reason:\s*/i, '').trim();
+  const score = scored.match(/^\s*(?:score:?\s*)?(\d{1,3})\b/i);
+  return { item: item!.trim(), reason: reason || null, score: score ? Number(score[1]) : null };
 }
 
 const STATUS: Array<[RegExp, Exclude<GoalStatus, null>]> = [

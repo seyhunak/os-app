@@ -2,7 +2,8 @@ import type { Brief, Kind, Source } from './api';
 
 /** The brief rules the server hands out, cached on the device for offline writing. */
 export interface BriefPrompt {
-  system: Record<Kind, string>;
+  /** Rules cached from an older server have no afternoon entry, so a brief falls back to the morning rules. */
+  system: Partial<Record<Kind, string>> & { morning: string };
   maxTokens: number;
   sourcesMarker: string;
 }
@@ -22,6 +23,8 @@ export interface OfflineBriefResult {
   generator: 'ai' | 'digest';
   sources: Source[];
 }
+
+const GREETING: Record<Kind, string> = { morning: 'Good morning', afternoon: 'Good afternoon', evening: 'Good evening' };
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 /** Offline briefs try the AI models for this long in all, then fall back to the plain version. */
@@ -84,7 +87,7 @@ export function renderTemplate(input: OfflineBriefInput, reason: string): string
   const updates = recentUpdates(input.updates, input.now).map((u) => `- ${u.at}: ${u.text}`);
   const note = extractNote(input.lastScan?.markdown);
   return [
-    `# ${input.kind === 'morning' ? 'Good morning' : 'Good evening'}`,
+    `# ${GREETING[input.kind]}`,
     `> Offline draft, written on this device: ${reason}. Nothing is ranked, and tools weren't read, so sources are from the last scan.`,
     `### Signals\n${note ? `From your last brief: ${note}` : 'Nothing is marked as a signal, because nothing was ranked.'}`,
     `### Goals\n${goals.join('\n') || 'No goals set yet. Paste them in Settings.'}${updates.length ? `\n\n**Your updates:**\n${updates.join('\n')}` : ''}`,
@@ -149,7 +152,7 @@ export async function writeOfflineBrief(input: OfflineBriefInput, ai: { prompt?:
               reasoning,
               provider: { data_collection: 'deny' },
               messages: [
-                { role: 'system', content: prompt.system[input.kind] },
+                { role: 'system', content: prompt.system[input.kind] ?? prompt.system.morning },
                 { role: 'user', content: renderUserPrompt(input) },
               ],
             }),

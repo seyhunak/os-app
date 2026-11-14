@@ -1,7 +1,7 @@
 import type { Connection } from './storage';
 import type { BriefPrompt } from './offlineBrief';
 
-export type Kind = 'morning' | 'evening';
+export type Kind = 'morning' | 'afternoon' | 'evening';
 
 export type Provider = 'openrouter';
 

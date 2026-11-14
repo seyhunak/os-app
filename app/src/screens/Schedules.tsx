@@ -57,7 +57,7 @@ export function SchedulesScreen({ api, onChanged }: { api: Api; onChanged(): voi
         <Card key={s.id}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: c.text, fontSize: 20, fontFamily: F.sansBold }}>{s.time} · {s.kind === 'morning' ? 'Morning' : 'Evening'}</Text>
+              <Text style={{ color: c.text, fontSize: 20, fontFamily: F.sansBold }}>{s.time} · {s.kind[0]!.toUpperCase() + s.kind.slice(1)}</Text>
               <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14 }}>{describeDays(s.days)} · {s.timezone}</Text>
             </View>
             <Switch accessibilityLabel={`${s.kind} brief at ${s.time} on or off`} value={s.enabled} onValueChange={(v) => setEnabled(s, v)} trackColor={{ true: c.accent }} />

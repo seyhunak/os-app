@@ -38,7 +38,7 @@ const validTimezone = (tz: string) => {
 
 const Timezone = z.string().min(1).max(64).refine(validTimezone, 'Unknown timezone');
 const ApiKey = z.object({ apiKey: z.string().trim().min(8).max(512) });
-const Kind = z.enum(['morning', 'evening']);
+const Kind = z.enum(['morning', 'afternoon', 'evening']);
 // Only OpenRouter now. Older apps still send the provider, so it's accepted and ignored.
 const ProviderName = z.literal('openrouter');
 const ScheduleBody = z.object({

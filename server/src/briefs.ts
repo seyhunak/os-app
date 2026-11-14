@@ -121,7 +121,10 @@ export class BriefService {
     return store.addBrief({ kind, trigger, generator, markdown, sources }, now);
   }
 
-  /** The skill's budget: one live pull per toolkit per day, evenings never pull, a 429 stops that toolkit for the day. */
+  /**
+   * The skill's budget: one live pull per toolkit per day, evenings never pull, a 429 stops that toolkit for the day.
+   * An afternoon brief reads like a morning one: today's cache if there is one, a pull if there isn't.
+   */
   private async gather(kind: Kind, date: string, now: Date, timeZone: string, refresh: boolean) {
     const { store } = this.deps;
     const gateway = this.deps.gateway();
@@ -145,7 +148,7 @@ export class BriefService {
         report('rate_limited');
         continue;
       }
-      const refetching = refresh && kind === 'morning';
+      const refetching = refresh && kind !== 'evening';
       if (cached?.status === 'ok' && !refetching) {
         facts[slug] = kept(cached.items);
         report('cache', facts[slug].length, cached.detail);

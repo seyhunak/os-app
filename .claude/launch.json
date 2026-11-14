@@ -1,0 +1,6 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    { "name": "fake-server", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev:fake"], "port": 8790, "env": { "PORT": "8790" } }
+  ]
+}

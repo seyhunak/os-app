@@ -104,6 +104,7 @@ ${noteGuide}`;
 
 const STRUCTURE: Record<Kind, string> = {
   morning: template('Good morning', 'The one thing to do first and the goal it moves, then what to ignore today.', 'What to do today.', 'One or two lines: what the next brief should check first.'),
+  afternoon: template('Good afternoon', 'What has moved since this morning, and the one thing to finish before the day ends.', 'What still needs doing today, given what has already happened.', 'One or two lines: what the evening brief should check, and anything to hand over to tomorrow.'),
   evening: template('Good evening', 'Which goal moved today, or that none did, and the one thing to start with tomorrow.', 'What mattered today and how each one ended, based only on the evidence.', 'One or two lines: what to start with tomorrow, with a carry or drop decision for anything unfinished.'),
 };
 
@@ -111,7 +112,7 @@ const STRUCTURE: Record<Kind, string> = {
  * The rules and layout, for a phone that writes a brief itself while the server is out of reach.
  * It caches these, so offline briefs follow the same rules without a second copy to keep in step.
  */
-export const briefPrompt = () => ({ system: { morning: `${SHARED_RULES}\n\n${STRUCTURE.morning}`, evening: `${SHARED_RULES}\n\n${STRUCTURE.evening}` }, maxTokens: MAX_OUTPUT_TOKENS, sourcesMarker: SOURCES_MARKER });
+export const briefPrompt = () => ({ system: { morning: `${SHARED_RULES}\n\n${STRUCTURE.morning}`, afternoon: `${SHARED_RULES}\n\n${STRUCTURE.afternoon}`, evening: `${SHARED_RULES}\n\n${STRUCTURE.evening}` }, maxTokens: MAX_OUTPUT_TOKENS, sourcesMarker: SOURCES_MARKER });
 
 const escapeTags = (text: string) => text.replaceAll('<', '\\u003c').replaceAll('>', '\\u003e');
 
@@ -393,12 +394,14 @@ export function describeComposeError(error: unknown): string {
   return error instanceof Error ? error.message : 'the AI step failed';
 }
 
+export const GREETING: Record<Kind, string> = { morning: 'Good morning', afternoon: 'Good afternoon', evening: 'Good evening' };
+
 /** No AI: the same layout, with no judgment about what matters. Sources summarize what was read. */
 export function renderDigest(input: BriefInput, reason: string): string {
   const goals = input.goals.split('\n').map((g) => g.trim()).filter(Boolean).map((g) => `- ⚪ ${g.replace(/^[-*]\s*/, '')}`);
   const updates = input.updates.map((u) => `- ${u.at}: ${u.text}`);
   return [
-    `# ${input.kind === 'morning' ? 'Good morning' : 'Good evening'}`,
+    `# ${GREETING[input.kind]}`,
     `> Unranked digest: ${reason}. Ranking, left-out items and goal status need an AI model, so they are left out rather than guessed.`,
     `### Signals\n${input.previousNote ? `From your last brief: ${input.previousNote}\n\n` : ''}${Object.values(input.facts).some((items) => items.length) ? 'Nothing is marked as a signal, because nothing was ranked. Sources below sum up what was read.' : 'Nothing was found in your tools.'}`,
     `### Goals\n${goals.join('\n') || 'No goals set yet. Paste them in Settings.'}${updates.length ? `\n\n**Your updates:**\n${updates.join('\n')}` : ''}`,

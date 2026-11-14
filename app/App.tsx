@@ -1,5 +1,5 @@
-import { Newsreader_400Regular, Newsreader_400Regular_Italic, Newsreader_600SemiBold } from '@expo-google-fonts/newsreader';
-import { LibreFranklin_400Regular, LibreFranklin_500Medium, LibreFranklin_700Bold } from '@expo-google-fonts/libre-franklin';
+import { HostGrotesk_400Regular, HostGrotesk_500Medium, HostGrotesk_600SemiBold } from '@expo-google-fonts/host-grotesk';
+import { AtkinsonHyperlegibleMono_400Regular, AtkinsonHyperlegibleMono_500Medium } from '@expo-google-fonts/atkinson-hyperlegible-mono';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -41,12 +41,12 @@ function Header({ onUpdate }: { onUpdate(): void }) {
   const c = useColors();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.bg }}>
-      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 24 }}>OS</Text>
+      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 22, letterSpacing: -0.6 }}>OS</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Add an update"
         onPress={onUpdate}
-        style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 18, borderRadius: 4, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.8 : 1 })}
+        style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 18, borderRadius: 6, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.8 : 1 })}
       >
         <Text style={{ color: c.onAccent, fontFamily: F.sansMedium, fontSize: 15 }}>Update</Text>
       </Pressable>
@@ -66,7 +66,7 @@ function ConnectionBanner({ onRetry }: { onRetry(): void }) {
   const waiting = pending ? `${pending === 1 ? '1 change' : `${pending} changes`} will sync when your Mac is back.` : 'Changes sync when your Mac is back.';
   const message = !online ? `Offline${when ? `, showing what was saved ${when}` : ''}. ${waiting}` : 'Back online. Syncing…';
   return (
-    <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.accentSoft }}>
+    <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.deep, borderBottomWidth: 1, borderColor: c.line }}>
       <Text style={{ flex: 1, color: c.text, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{message}</Text>
       {!online ? (
         <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}>
@@ -174,12 +174,11 @@ function registerOfflineWeb() {
 export default function App() {
   // Falls back to system fonts if loading fails, rather than leaving a blank screen.
   const [fontsLoaded, fontError] = useFonts({
-    Newsreader_400Regular,
-    Newsreader_400Regular_Italic,
-    Newsreader_600SemiBold,
-    LibreFranklin_400Regular,
-    LibreFranklin_500Medium,
-    LibreFranklin_700Bold,
+    HostGrotesk_400Regular,
+    HostGrotesk_500Medium,
+    HostGrotesk_600SemiBold,
+    AtkinsonHyperlegibleMono_400Regular,
+    AtkinsonHyperlegibleMono_500Medium,
   });
   useEffect(registerOfflineWeb, []);
   if (!fontsLoaded && !fontError) return null;

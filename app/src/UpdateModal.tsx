@@ -60,7 +60,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
                 onChangeText={(value) => { setText(value); setSaved(null); }}
                 placeholder="For example: sent the proposal to Sam and fixed the login bug."
                 placeholderTextColor={c.muted}
-                style={{ minHeight: 110, borderWidth: 1, borderColor: c.line, borderRadius: 4, padding: 14, color: c.text, fontFamily: F.text, fontSize: 18, lineHeight: 26, textAlignVertical: 'top' }}
+                style={{ minHeight: 110, borderWidth: 1, borderColor: c.line, borderRadius: 6, backgroundColor: c.deep, padding: 14, color: c.text, fontFamily: F.text, fontSize: 18, lineHeight: 26, textAlignVertical: 'top' }}
               />
               {saved ? (
                 <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>{saved === 'device' ? `Saved to your ledger. Your next brief will use this${online ? '' : ', even offline'}. It syncs to your Mac ${online ? 'in the background' : "when it's back"}.` : 'Saved to your ledger. Your next brief will use this.'}</Text>

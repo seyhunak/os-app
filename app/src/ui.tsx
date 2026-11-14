@@ -4,26 +4,43 @@ import {
   type TextInputProps,
 } from 'react-native';
 
-/** Green-tinted newsprint by day, deep forest for the night edition. Red is only for what's urgent. */
+/**
+ * Hallmark's Console theme. Graphite by night, its paper colourway by day. Amber stands for you
+ * (your focus, your goals, the next step), cool blue for an instrument (a tool, a score, a time).
+ * Ok and bad are for status only.
+ */
 const light = {
-  bg: '#EEF1EA', card: '#F8FAF5', text: '#16201C', muted: '#56615B', line: '#C6CDC2',
-  accent: '#1F5C4D', onAccent: '#F8FAF5', accentSoft: '#DDE7DF', danger: '#A5321F', dangerSoft: '#F4E0DA',
+  bg: '#FAF8F4', card: '#FFFFFF', deep: '#F2F0EB', text: '#17130F', ink2: '#37322E', muted: '#5D5751',
+  line: '#DBD7D0', line2: '#B5B0A9',
+  accent: '#A15C00', onAccent: '#FFFBF4', accentSoft: '#F6E6CB',
+  cool: '#116BB5', coolSoft: '#DBEEFE', ok: '#137738', okSoft: '#D9F3DD',
+  danger: '#B63132', dangerSoft: '#FFE3DF',
 };
 const dark: typeof light = {
-  bg: '#12201B', card: '#1A2B25', text: '#E8EDE4', muted: '#A3B0A8', line: '#34463E',
-  accent: '#8FD3BE', onAccent: '#0F1F19', accentSoft: '#1F3A31', danger: '#F0998A', dangerSoft: '#40241E',
+  bg: '#0D1013', card: '#15191C', deep: '#06080B', text: '#ECEFF2', ink2: '#C3C8CC', muted: '#9DA2A8',
+  line: '#2D3135', line2: '#484E54',
+  accent: '#F7B83D', onAccent: '#1C0E00', accentSoft: '#38280A',
+  cool: '#6EBCFC', coolSoft: '#142E43', ok: '#61CB7C', okSoft: '#162519',
+  danger: '#F66D67', dangerSoft: '#2F1A18',
 };
 
 /** Fonts load in App.tsx. Each weight is its own family, because Android ignores fontWeight on custom fonts. */
 export const F = {
-  display: 'Newsreader_600SemiBold',
-  text: 'Newsreader_400Regular',
-  italic: 'Newsreader_400Regular_Italic',
-  bold: 'Newsreader_600SemiBold',
-  sans: 'LibreFranklin_400Regular',
-  sansMedium: 'LibreFranklin_500Medium',
-  sansBold: 'LibreFranklin_700Bold',
+  display: 'HostGrotesk_500Medium',
+  text: 'HostGrotesk_400Regular',
+  /** Console sets everything roman, so the old italic role reads in the regular cut. */
+  italic: 'HostGrotesk_400Regular',
+  bold: 'HostGrotesk_500Medium',
+  sans: 'HostGrotesk_400Regular',
+  sansMedium: 'HostGrotesk_500Medium',
+  sansBold: 'HostGrotesk_600SemiBold',
+  /** Only for what a tool or the system wrote: a score, a time, a count. Never a label or a button. */
+  mono: 'AtkinsonHyperlegibleMono_400Regular',
+  monoMedium: 'AtkinsonHyperlegibleMono_500Medium',
 };
+
+/** Hairline panels at 10px, controls at 6px, chips at 4px. */
+export const R = { card: 10, control: 6, chip: 4 };
 
 export type Colors = typeof light;
 
@@ -48,14 +65,14 @@ export function Title({ children, step }: { children: ReactNode; step?: string }
   return (
     <View style={{ gap: 6 }}>
       {step ? <Text style={{ color: c.muted, fontSize: 13, fontFamily: F.sansMedium }}>{step}</Text> : null}
-      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 36, lineHeight: 41, letterSpacing: -0.5 }}>{children}</Text>
+      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 34, lineHeight: 36, letterSpacing: -1 }}>{children}</Text>
     </View>
   );
 }
 
 export function Body({ children, muted }: { children: ReactNode; muted?: boolean }) {
   const c = useColors();
-  return <Text style={{ color: muted ? c.muted : c.text, fontFamily: F.text, fontSize: 18, lineHeight: 27 }}>{children}</Text>;
+  return <Text style={{ color: muted ? c.muted : c.text, fontFamily: F.text, fontSize: 17, lineHeight: 26 }}>{children}</Text>;
 }
 
 /**
@@ -65,7 +82,7 @@ export function Body({ children, muted }: { children: ReactNode; muted?: boolean
 export function Section({ title, children, collapsed, summary }: { title: string; children: ReactNode; collapsed?: boolean; summary?: string }) {
   const c = useColors();
   const [open, setOpen] = useState(!collapsed);
-  const heading = <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 24, lineHeight: 30 }}>{title}</Text>;
+  const heading = <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 22, lineHeight: 26, letterSpacing: -0.5 }}>{title}</Text>;
   if (collapsed === undefined) {
     return (
       <View style={{ gap: 10 }}>
@@ -96,7 +113,7 @@ export function Section({ title, children, collapsed, summary }: { title: string
 
 export function Card({ children }: { children: ReactNode }) {
   const c = useColors();
-  return <View style={{ backgroundColor: c.card, borderColor: c.line, borderWidth: StyleSheet.hairlineWidth, borderRadius: 4, padding: 16, gap: 12 }}>{children}</View>;
+  return <View style={{ backgroundColor: c.card, borderColor: c.line, borderWidth: 1, borderRadius: R.card, padding: 16, gap: 12 }}>{children}</View>;
 }
 
 interface ButtonProps {
@@ -120,7 +137,7 @@ export function Button({ label, onPress, variant = 'primary', busy, disabled }: 
       onPress={onPress}
       style={({ pressed }) => [
         styles.button,
-        { backgroundColor: primary ? c.accent : 'transparent', borderColor: primary ? c.accent : variant === 'danger' ? c.danger : c.line },
+        { backgroundColor: primary ? c.accent : c.card, borderColor: primary ? c.accent : variant === 'danger' ? c.danger : c.line2 },
         { opacity: inactive ? 0.55 : pressed ? 0.8 : 1 },
       ]}
     >
@@ -141,7 +158,7 @@ export function Field({ label, hint, ...input }: TextInputProps & { label: strin
         autoCorrect={false}
         placeholderTextColor={c.muted}
         {...input}
-        style={[styles.input, { color: c.text, backgroundColor: c.card, borderColor: c.line, fontFamily: F.text }, input.multiline ? { minHeight: 150, lineHeight: 25, textAlignVertical: 'top' } : null]}
+        style={[styles.input, { color: c.text, backgroundColor: c.deep, borderColor: c.line, fontFamily: F.text }, input.multiline ? { minHeight: 150, lineHeight: 25, textAlignVertical: 'top' } : null]}
       />
       {hint ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>{hint}</Text> : null}
     </View>
@@ -152,7 +169,7 @@ export function ErrorNote({ message }: { message: string | null }) {
   const c = useColors();
   if (!message) return null;
   return (
-    <View accessibilityRole="alert" style={{ backgroundColor: c.dangerSoft, borderRadius: 4, padding: 12 }}>
+    <View accessibilityRole="alert" style={{ backgroundColor: c.dangerSoft, borderRadius: R.control, padding: 12 }}>
       <Text style={{ color: c.danger, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>{message}</Text>
     </View>
   );
@@ -161,7 +178,7 @@ export function ErrorNote({ message }: { message: string | null }) {
 export function Note({ children }: { children: ReactNode }) {
   const c = useColors();
   return (
-    <View style={{ backgroundColor: c.accentSoft, borderRadius: 4, padding: 12 }}>
+    <View style={{ backgroundColor: c.deep, borderWidth: 1, borderColor: c.line, borderRadius: R.control, padding: 12 }}>
       <Text style={{ color: c.text, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>{children}</Text>
     </View>
   );
@@ -175,9 +192,9 @@ export function Chip({ label, selected, onPress, accessibilityLabel }: { label: 
       accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ checked: selected }}
       onPress={onPress}
-      style={[styles.chip, { backgroundColor: selected ? c.accent : 'transparent', borderColor: selected ? c.accent : c.line }]}
+      style={[styles.chip, { backgroundColor: selected ? c.accentSoft : 'transparent', borderColor: selected ? c.accent : c.line2 }]}
     >
-      <Text style={{ color: selected ? c.onAccent : c.text, fontFamily: F.sansMedium, fontSize: 15 }}>{label}</Text>
+      <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 15 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -197,7 +214,7 @@ export const message = (error: unknown) => (error instanceof Error ? error.messa
 const styles = StyleSheet.create({
   screen: { flexGrow: 1, padding: 20, paddingBottom: 48, alignItems: 'center' },
   column: { width: '100%', gap: 24 },
-  button: { minHeight: 48, borderRadius: 4, borderWidth: 1, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  input: { minHeight: 48, borderWidth: 1, borderRadius: 4, paddingHorizontal: 14, paddingVertical: 12, fontSize: 17, ...(Platform.OS === 'web' ? { outlineWidth: 0 } : null) },
-  chip: { minHeight: 44, minWidth: 44, paddingHorizontal: 14, borderRadius: 22, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  button: { minHeight: 48, borderRadius: R.control, borderWidth: 1, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  input: { minHeight: 48, borderWidth: 1, borderRadius: R.control, paddingHorizontal: 14, paddingVertical: 12, fontSize: 17, ...(Platform.OS === 'web' ? { outlineWidth: 0 } : null) },
+  chip: { minHeight: 44, minWidth: 44, paddingHorizontal: 14, borderRadius: R.chip, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

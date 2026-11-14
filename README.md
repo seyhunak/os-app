@@ -21,7 +21,7 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 │ Expo app (app/)          │  HTTPS :8443  │ tailscale serve  →  127.0.0.1:8787   │
 │ - saved copy of briefs,  │ ────────────▶ │ Hono server (server/)                │
 │   ledger, goals          │  Bearer token │ - SQLite: briefs, ledger, pull cache │
-│ - offline queue          │               │ - scheduler (morning / evening)      │
+│ - offline queue          │               │ - scheduler (morning, noon, evening) │
 │ - offline briefs, same   │               │ - Composio  → your tools (read-only) │
 │   OpenRouter key         │               │ - OpenRouter → the brief             │
 └──────────────────────────┘               │                                      │
@@ -37,11 +37,11 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** Gmail, Outlook, Google Calendar, Calendly, Google Tasks, Google Drive, Notion, Slack, GitHub, GitLab, Jira, Linear, Asana, Trello, Todoist, HubSpot and Hacker News.
 3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Choose the model in Settings, where cheap models that write well are recommended. Without a key, you get a plain summary of what was read.
-4. **Choose a schedule.** Pick morning or evening briefs, the time, the days and the timezone. The server writes them, and any device can read them.
+4. **Choose a schedule.** Pick morning, afternoon or evening briefs, the time, the days and the timezone. The server writes them, and any device can read them.
 
 ## What a brief looks like
 
-Every brief, morning or evening, runs in the same order:
+Every brief, morning, afternoon or evening, runs in the same order:
 
 1. **Focus:** the one thing to do first, the goal it moves and what to ignore.
 2. **Signals:** at most 3 things to do, highest priority first, each showing its source and the goal it serves.
@@ -297,4 +297,4 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 
 [MIT](LICENSE)
 
-The app bundles the [Newsreader](https://fonts.google.com/specimen/Newsreader) and [Libre Franklin](https://fonts.google.com/specimen/Libre+Franklin) fonts, under the SIL Open Font License.
+The app uses Hallmark's Console theme and bundles the [Host Grotesk](https://fonts.google.com/specimen/Host+Grotesk) and [Atkinson Hyperlegible Mono](https://fonts.google.com/specimen/Atkinson+Hyperlegible+Mono) fonts, under the SIL Open Font License.

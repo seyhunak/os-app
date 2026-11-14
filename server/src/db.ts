@@ -1,7 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 
-export type Kind = 'morning' | 'evening';
+export type Kind = 'morning' | 'afternoon' | 'evening';
 
 export interface SourceReport {
   toolkit: string;
