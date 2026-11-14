@@ -71,7 +71,7 @@ export class BriefService {
     const now = this.deps.now?.() ?? new Date();
     const zone = timezone ?? store.getSetting('timezone') ?? 'UTC';
     const date = localDate(now, zone);
-    store.pruneCache();
+    store.pruneCache(now);
 
     const { facts, sources } = await this.gather(kind, date, now, zone, Boolean(refresh));
     for (const source of sources) {

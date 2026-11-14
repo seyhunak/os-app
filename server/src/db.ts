@@ -149,8 +149,8 @@ export class Store {
   }
 
   /** Cached pulls hold email snippets, so they don't stay on disk indefinitely. */
-  pruneCache(): void {
-    const cutoff = new Date(Date.now() - CACHE_DAYS * 86_400_000).toISOString().slice(0, 10);
+  pruneCache(now = new Date()): void {
+    const cutoff = new Date(now.getTime() - CACHE_DAYS * 86_400_000).toISOString().slice(0, 10);
     this.db.prepare('DELETE FROM pulls WHERE date < ?').run(cutoff);
   }
 
