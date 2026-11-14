@@ -307,6 +307,11 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
     }
   }, [api]);
 
+  /** Picks up a brief the Mac saved after this device stopped waiting for it. Keeps the error shown. */
+  const reloadQuietly = useCallback(() => {
+    api.briefs().then(({ briefs: list }) => setBriefs(list), () => undefined);
+  }, [api]);
+
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
@@ -328,12 +333,16 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
         setBriefs((list) => [brief, ...(list ?? []).filter((b) => b.id !== brief.id)]);
         setOpenId(null);
       })
-      .catch((e) => live && setError(message(e)))
+      .catch((e) => {
+        if (!live) return;
+        setError(message(e));
+        reloadQuietly();
+      })
       .finally(() => live && setGenerating(false));
     return () => {
       live = false;
     };
-  }, [auto, briefs, online]);
+  }, [auto, briefs, online, reloadQuietly]);
 
   const [confirmAll, setConfirmAll] = useState(false);
   /** Hidden at once. The server archives them now, or when it's back if this device is offline. */
@@ -358,6 +367,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
       setOpenId(brief.id);
     } catch (e) {
       setError(message(e));
+      if (online) reloadQuietly();
     } finally {
       setBusy(null);
     }

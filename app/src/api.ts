@@ -129,14 +129,27 @@ const READ_TIMEOUT_MS = 10_000;
 export const PROBE_TIMEOUT_MS = 3_000;
 /** Queued changes are safe to resend, so their sends give up rather than hang on a dead tunnel. */
 export const SEND_TIMEOUT_MS = 8_000;
+/**
+ * Writing a brief can take minutes when free models are slow, but a request whose connection died
+ * (the server restarted, or iOS suspended the app) would otherwise never finish and keep the brief
+ * buttons disabled until the app is closed. So it gives up after this long.
+ */
+export const BRIEF_TIMEOUT_MS = 6 * 60_000;
+export const BRIEF_TIMEOUT_MESSAGE = "Your Mac didn't answer in time. If it's still writing the brief, it will show here once it's saved.";
 
-export function createApi({ url, token }: Connection) {
-  async function request<T>(path: string, method = 'GET', body?: unknown, timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : 0): Promise<T> {
+export interface ApiOptions {
+  /** Overrides BRIEF_TIMEOUT_MS. For tests. */
+  briefTimeoutMs?: number;
+}
+
+export function createApi({ url, token }: Connection, { briefTimeoutMs = BRIEF_TIMEOUT_MS }: ApiOptions = {}) {
+  async function request<T>(path: string, method = 'GET', body?: unknown, timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : 0, timeoutMessage?: string): Promise<T> {
     let response: Response;
     const unreachable = () => new ApiError(`Can't reach your OS server at ${url}. Check that it's running.`, 0);
-    // Reads give up quickly so an outage shows saved content. Writing a brief can legitimately take a while.
+    // Reads give up quickly so an outage shows saved content. Writing a brief gets minutes instead.
     const controller = new AbortController();
-    const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : null;
+    let timedOut = false;
+    const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs) : null;
     try {
       response = await fetch(`${url}/api${path}`, {
         method,
@@ -145,7 +158,7 @@ export function createApi({ url, token }: Connection) {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
     } catch {
-      throw unreachable();
+      throw timedOut && timeoutMessage ? new ApiError(timeoutMessage, 0) : unreachable();
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -182,9 +195,9 @@ export function createApi({ url, token }: Connection) {
     importBrief: (draft: BriefDraft) => request<Brief>('/briefs/import', 'POST', draft, SEND_TIMEOUT_MS),
     archiveBriefs: (ids: number[]) => request<{ archived: number }>('/briefs/archive', 'POST', { ids }, SEND_TIMEOUT_MS),
     briefs: () => request<{ briefs: Brief[] }>('/briefs'),
-    generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }),
+    generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }, briefTimeoutMs, BRIEF_TIMEOUT_MESSAGE),
     /** Writes today's first brief, unless one from today already exists, in which case the server returns that. */
-    generateTodayBrief: (kind: Kind) => request<Brief>('/briefs', 'POST', { kind, ifStale: true }),
+    generateTodayBrief: (kind: Kind) => request<Brief>('/briefs', 'POST', { kind, ifStale: true }, briefTimeoutMs, BRIEF_TIMEOUT_MESSAGE),
     schedules: () => request<{ schedules: Schedule[] }>('/schedules'),
     createSchedule: (input: ScheduleInput) => request<Schedule>('/schedules', 'POST', input),
     updateSchedule: (id: number, input: ScheduleInput) => request<Schedule>(`/schedules/${id}`, 'PUT', input),

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import { createServer as createTcpServer, type AddressInfo } from 'node:net';
 import { after, describe, it } from 'node:test';
-import { ApiError, createApi, PROBE_TIMEOUT_MS } from '../src/api';
+import { ApiError, BRIEF_TIMEOUT_MESSAGE, BRIEF_TIMEOUT_MS, createApi, PROBE_TIMEOUT_MS } from '../src/api';
 import { probe, TimeoutError, withTimeout } from '../src/connectivity';
 
 const closers: Array<() => void> = [];
@@ -75,5 +75,20 @@ describe('startup probe', () => {
 
   it('counts a network failure as offline', async () => {
     assert.equal(await probe(async () => { throw new ApiError('down', 0); }), false);
+  });
+});
+
+describe('writing a brief', () => {
+  it('waits minutes, long enough for slow free models', () => {
+    assert.ok(BRIEF_TIMEOUT_MS >= 5 * 60_000);
+  });
+
+  it('gives up on a connection that never answers, so the brief buttons come back', async () => {
+    const api = createApi({ url: await blackHole(), token: 't' }, { briefTimeoutMs: 300 });
+    for (const write of [() => api.generateBrief('morning'), () => api.generateTodayBrief('morning')]) {
+      const started = Date.now();
+      await assert.rejects(write(), (e: unknown) => e instanceof ApiError && e.message === BRIEF_TIMEOUT_MESSAGE);
+      assert.ok(Date.now() - started < 1_500);
+    }
   });
 });
