@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1062,3 +1062,54 @@ describe('offline updates', () => {
   });
 });
 
+
+describe('local token for the web app on this Mac', () => {
+  const ask = (headers: Record<string, string>, remoteAddress = '127.0.0.1') =>
+    setup().app.request('http://127.0.0.1:8787/local-token', { headers: { host: '127.0.0.1:8787', 'sec-fetch-site': 'same-origin', ...headers } }, { incoming: { socket: { remoteAddress } } });
+
+  it('gives the token to its own page opened on this machine', async () => {
+    const response = await ask({});
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+    expect(await response.json()).toEqual({ token: TOKEN });
+    expect((await ask({ host: 'localhost:8787' }, '::ffff:127.0.0.1')).status).toBe(200);
+  });
+
+  it.each([
+    ['through tailscale serve', { 'x-forwarded-for': '100.64.0.2' }, '127.0.0.1'],
+    ['with a Tailscale identity header', { 'tailscale-user-login': 'me@example.com' }, '127.0.0.1'],
+    ['from another device', {}, '192.168.1.20'],
+    ['from a rebound domain', { host: 'evil.example:8787' }, '127.0.0.1'],
+    ['from another website', { 'sec-fetch-site': 'cross-site' }, '127.0.0.1'],
+  ])('refuses a request %s', async (_, headers, remoteAddress) => {
+    const response = await ask(headers, remoteAddress);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain(TOKEN);
+  });
+
+  it('can be turned off', async () => {
+    const { app } = createApp({ store: new Store(join(mkdtempSync(join(tmpdir(), 'os-test-')), 'os.db'), randomBytes(32)), token: TOKEN, env: { OS_LOCAL_TOKEN: 'off' }, createGateway: () => fakeGateway().gateway });
+    const response = await app.request('/local-token', { headers: { host: '127.0.0.1:8787', 'sec-fetch-site': 'same-origin' } }, { incoming: { socket: { remoteAddress: '127.0.0.1' } } });
+    expect(response.status).toBe(404);
+  });
+
+  it('refuses a request with no browser fetch header, such as curl', async () => {
+    const response = await setup().app.request('/local-token', { headers: { host: '127.0.0.1:8787' } }, { incoming: { socket: { remoteAddress: '127.0.0.1' } } });
+    expect(response.status).toBe(404);
+  });
+});
+
+describe('web app caching', () => {
+  it('rechecks the page every time and keeps content-named bundles', async () => {
+    const webDir = mkdtempSync(join(tmpdir(), 'os-web-'));
+    mkdirSync(join(webDir, '_expo/static/js/web'), { recursive: true });
+    writeFileSync(join(webDir, 'index.html'), '<!doctype html>');
+    writeFileSync(join(webDir, '_expo/static/js/web/index-abc.js'), '1');
+    const { app } = createApp({ store: new Store(join(webDir, 'os.db'), randomBytes(32)), token: TOKEN, env: {}, createGateway: () => fakeGateway().gateway, webDir });
+    expect((await app.request('/')).headers.get('cache-control')).toBe('no-cache');
+    expect((await app.request('/settings')).headers.get('cache-control')).toBe('no-cache');
+    expect((await app.request('/_expo/static/js/web/index-abc.js')).headers.get('cache-control')).toContain('immutable');
+    expect((await app.request('/health')).headers.get('cache-control')).toBeNull();
+  });
+});

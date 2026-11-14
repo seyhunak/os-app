@@ -64,7 +64,7 @@ npm run build:web
 npm start
 ```
 
-The first start prints your server token and saves it in `~/.os-app/token`. Open <http://127.0.0.1:8787>, paste the token, and follow the steps.
+The first start prints your server token and saves it in `~/.os-app/token`. Open <http://127.0.0.1:8787> on the same Mac and the token fills in by itself; on any other device, paste it. Then follow the steps.
 
 To keep it running on a Mac and reach it from your other devices, follow [SETUP.md](SETUP.md). It covers the background service, Tailscale, web and mobile.
 
@@ -243,6 +243,7 @@ Everything is optional. These are the variable names. Never commit their values.
 | `OS_TOKEN` | server | Fixes the server token instead of generating one |
 | `OS_DATA_DIR` | server | Where the database and token live. Defaults to `~/.os-app` |
 | `OS_WEB_DIR` | server | Where the built web app is served from |
+| `OS_LOCAL_TOKEN` | server | `off` stops the web app on this Mac from filling in the token by itself. Use it on a Mac shared with other accounts |
 | `HOST`, `PORT` | server | Listen address. Defaults to `127.0.0.1` and `8787` |
 | `EXPO_PUBLIC_OS_URL` | app | Prefills the server address in a build |
 

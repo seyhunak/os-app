@@ -55,7 +55,7 @@ The first start creates your server token in `~/.os-app/token`. This copies it w
 pbcopy < ~/.os-app/token
 ```
 
-Open <http://127.0.0.1:8787>, paste the token, and follow the steps to add your keys, tools, goals and schedule. Keys are stored encrypted in `~/.os-app`, not in the service.
+Open <http://127.0.0.1:8787> on this Mac. The token fills in by itself, so follow the steps to add your keys, tools, goals and schedule. Keys are stored encrypted in `~/.os-app`, not in the service.
 
 ### Managing the service
 

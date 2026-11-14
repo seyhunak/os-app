@@ -17,7 +17,7 @@ import { Scheduler } from './scheduler.ts';
 export interface AppDeps {
   store: Store;
   token: string;
-  env: { COMPOSIO_API_KEY?: string; OPENROUTER_API_KEY?: string; OS_MODEL?: string };
+  env: { COMPOSIO_API_KEY?: string; OPENROUTER_API_KEY?: string; OS_MODEL?: string; OS_LOCAL_TOKEN?: string };
   createGateway(apiKey: string): ComposioGateway;
   createComposer?(config: AiConfig): Composer;
   verifyOpenRouterKey?(apiKey: string): Promise<void>;
@@ -26,6 +26,23 @@ export interface AppDeps {
 }
 
 const sha = (value: string) => createHash('sha256').update(value).digest();
+
+const LOOPBACK_HOST = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/i;
+const LOOPBACK_PEER = /^(127\.|::1$|::ffff:127\.)/;
+/** Headers a proxy adds, such as `tailscale serve`, which reaches the server from loopback too. */
+const PROXY_HEADERS = ['x-forwarded-for', 'x-forwarded-host', 'forwarded', 'tailscale-user-login', 'tailscale-headers-info'];
+
+/**
+ * True only for the web app's own page, opened in a browser on this machine: a loopback peer,
+ * a loopback Host (so a rebound domain can't pass), no proxy in between, and a same-origin fetch.
+ */
+export function isLocalPageRequest(c: Context): boolean {
+  const peer = (c.env as { incoming?: { socket?: { remoteAddress?: string } } } | undefined)?.incoming?.socket?.remoteAddress ?? '';
+  return LOOPBACK_PEER.test(peer)
+    && LOOPBACK_HOST.test(c.req.header('host') ?? '')
+    && !PROXY_HEADERS.some((h) => c.req.header(h) !== undefined)
+    && c.req.header('sec-fetch-site') === 'same-origin';
+}
 
 const validTimezone = (tz: string) => {
   try {
@@ -144,6 +161,9 @@ export function createApp(deps: AppDeps) {
   app.use('/api/*', cors({ origin: '*', allowHeaders: ['Authorization', 'Content-Type'], allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] }));
   app.use('/api/*', bodyLimit({ maxSize: 256 * 1024 }));
   app.get('/health', (c) => c.json({ ok: true }));
+  // Fills the token into the web app's sign-in, but only for a page opened on this Mac. It sits
+  // outside /api, so the any-origin CORS rule there doesn't let other websites read it.
+  app.get('/local-token', (c) => (deps.env.OS_LOCAL_TOKEN !== 'off' && isLocalPageRequest(c) ? c.json({ token: deps.token }, 200, { 'Cache-Control': 'no-store' }) : c.notFound()));
   app.use('/api/*', async (c, next) => {
     if (c.req.method === 'OPTIONS') return next();
     const header = c.req.header('authorization') ?? '';
@@ -383,6 +403,14 @@ export function createApp(deps: AppDeps) {
   // The server also hosts the web app, once it's been built.
   if (deps.webDir && existsSync(deps.webDir)) {
     const root = deps.webDir;
+    // Bundles are named by their content, so they keep. Everything else, the page above all, is checked
+    // each time, or a browser can keep showing the app from before the last build.
+    app.use('/*', async (c, next) => {
+      await next();
+      if (c.res.status === 200 && !c.res.headers.has('Cache-Control')) {
+        c.header('Cache-Control', c.req.path.startsWith('/_expo/static/') ? 'public, max-age=31536000, immutable' : 'no-cache');
+      }
+    });
     app.use('/*', serveStatic({ root }));
     app.get('/*', serveStatic({ root, path: 'index.html' }));
   }

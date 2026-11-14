@@ -20,9 +20,25 @@ export function PairScreen({ onPaired }: { onPaired(connection: Connection): voi
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [localFill, setLocalFill] = useState(false);
+
   useEffect(() => {
-    if (linkToken) void submit(linkToken);
-    // Runs once: a link connects on arrival, typing never does.
+    if (linkToken) {
+      void submit(linkToken);
+      return;
+    }
+    // Opened on the Mac that runs the server: the server hands this page its token, so it connects by itself.
+    if (Platform.OS !== 'web' || typeof location === 'undefined' || !/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) return;
+    fetch(`${location.origin}/local-token`, { cache: 'no-store' })
+      .then((r) => (r.ok ? (r.json() as Promise<{ token?: string }>) : null))
+      .then((body) => {
+        if (!body?.token) return;
+        setToken(body.token);
+        setLocalFill(true);
+        void submit(body.token);
+      })
+      .catch(() => undefined);
+    // Runs once: a link or this Mac connects on arrival, typing never does.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -47,7 +63,7 @@ export function PairScreen({ onPaired }: { onPaired(connection: Connection): voi
       <Body>A short daily brief from your own tools: what matters, what to drop, and what to do next.</Body>
       <Body muted>Connect to your OS server. It keeps your keys and briefs on your own machine.</Body>
       <Field label="Server address" value={url} onChangeText={setUrl} keyboardType="url" autoComplete="off" />
-      <Field label="Server token" value={token} onChangeText={setToken} secureTextEntry hint="Printed when the server first starts, and saved in ~/.os-app/token." onSubmitEditing={() => void submit()} />
+      <Field label="Server token" value={token} onChangeText={setToken} secureTextEntry hint={localFill ? 'Filled in from this Mac’s server.' : 'Printed when the server first starts, and saved in ~/.os-app/token. On the Mac that runs the server, open 127.0.0.1:8787 and it fills in by itself.'} onSubmitEditing={() => void submit()} />
       <ErrorNote message={error} />
       <Button label="Connect" busy={busy} disabled={!token.trim()} onPress={() => void submit()} />
     </Screen>
