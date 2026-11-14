@@ -12,6 +12,7 @@ import { SchedulesScreen } from './src/screens/Schedules';
 import { SettingsScreen } from './src/screens/Settings';
 import { TodayScreen } from './src/screens/Today';
 import { UpdateModal } from './src/UpdateModal';
+import { takeLinkToken } from './src/linkToken';
 import { clearConnection, loadConnection, type Connection } from './src/storage';
 import { Button, ErrorNote, F, Loading, message, Screen, ThemeProvider, Title, useColors } from './src/ui';
 
@@ -103,7 +104,11 @@ function Root() {
   }, [api]);
 
   useEffect(() => {
-    void loadConnection().then(setConnection);
+    void loadConnection().then((saved) => {
+      // Already connected: drop a #token= link's token from the address bar instead of leaving it there.
+      if (saved && Platform.OS === 'web') takeLinkToken();
+      setConnection(saved);
+    });
   }, []);
   useEffect(() => {
     void refresh();

@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Linking, Platform } from 'react-native';
 import { COMPOSIO_URL, createApi, deviceTimezone, normalizeServerUrl, type Api, type Brief, type Status, type Toolkit } from '../api';
+import { takeLinkToken } from '../linkToken';
 import { saveConnection, savePhoneAiKey, type Connection } from '../storage';
 import { ToolList } from '../ToolList';
 import { Body, Button, ErrorNote, Field, message, Screen, Title } from '../ui';
@@ -12,16 +13,24 @@ function defaultServerUrl() {
 
 export function PairScreen({ onPaired }: { onPaired(connection: Connection): void }) {
   const [url, setUrl] = useState(defaultServerUrl);
-  // Private mobile builds can prefill this. Never for web, whose bundle is served without a login.
-  const [token, setToken] = useState(Platform.OS === 'web' ? '' : (process.env.EXPO_PUBLIC_OS_TOKEN ?? ''));
+  // Web takes the token only from a one-time #token= link, never from the bundle, which is served without a login.
+  // Private mobile builds can prefill it at build time.
+  const [linkToken] = useState(() => (Platform.OS === 'web' ? takeLinkToken() : null));
+  const [token, setToken] = useState(linkToken ?? (Platform.OS === 'web' ? '' : (process.env.EXPO_PUBLIC_OS_TOKEN ?? '')));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async () => {
+  useEffect(() => {
+    if (linkToken) void submit(linkToken);
+    // Runs once: a link connects on arrival, typing never does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const submit = async (value = token) => {
     setBusy(true);
     setError(null);
     try {
-      const connection = { url: normalizeServerUrl(url), token: token.trim() };
+      const connection = { url: normalizeServerUrl(url), token: value.trim() };
       await createApi(connection).status();
       await saveConnection(connection);
       onPaired(connection);
