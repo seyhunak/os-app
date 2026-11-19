@@ -9,39 +9,38 @@
 
 A short daily brief from your own tools: what matters, what to drop, and what to do next.
 
-OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses free AI models through [OpenRouter](https://openrouter.ai), with a cheap paid one as backup, to rank what it finds against your goals, and writes a brief on a schedule you choose. You run the server yourself, and read your briefs on the web, iPhone or Android.
+OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses free AI models through [OpenRouter](https://openrouter.ai), with a cheap paid one as backup, to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
 ## Architecture
 
 ```
- iPhone / Android / browser                 Your Mac (always on)
-┌──────────────────────────┐   Tailscale   ┌──────────────────────────────────────┐
-│ Expo app (app/)          │  HTTPS :8443  │ tailscale serve  →  127.0.0.1:8787   │
-│ - saved copy of briefs,  │ ────────────▶ │ Hono server (server/)                │
-│   ledger, goals          │  Bearer token │ - SQLite: briefs, ledger, pull cache │
-│ - offline queue          │               │ - scheduler (morning / evening)      │
-│ - offline briefs, same   │               │ - Composio  → your tools (read-only) │
-│   OpenRouter key         │               │ - OpenRouter → the brief             │
-└──────────────────────────┘               │                                      │
-                                           └──────────────────────────────────────┘
+ Your phone (iPhone or Android)
+┌──────────────────────────────────────────┐
+│ Expo app (app/)                          │
+│ - Keychain / Keystore: your two API keys │      ┌──────────────────────────┐
+│ - SQLite: briefs, ledger, goals,         │ ───▶ │ Composio: your tools,    │
+│   schedules, 7-day pull cache            │ HTTPS│ read-only                │
+│ - local reminders at schedule times      │      ├──────────────────────────┤
+│ - brief rules, collectors, ranking       │ ───▶ │ OpenRouter: the brief    │
+└──────────────────────────────────────────┘      └──────────────────────────┘
 ```
 
-- **Server** (`server/`): a single Node process that listens on `127.0.0.1` only. It holds your keys, reads your tools through Composio, writes briefs with OpenRouter, and serves the web app. On a Mac it runs as a launch agent, so it starts at login and restarts if it stops.
-- **Tailscale** puts the server on a private HTTPS address, `https://<machine>.<tailnet>.ts.net:8443`, that only your own devices can reach, on any network.
-- **Client** (`app/`): one Expo codebase for iOS, Android and web. It talks to the server with a token and keeps a copy of what it last read, so it still works when the Mac is asleep. On iPhone and Android it can also write a brief itself while the Mac is away.
+- **Everything is on the phone.** The app holds your keys in the system keychain and keeps its data in SQLite on the device. Its core (`app/src/core/`) reads your tools, writes briefs and keeps the once-a-day budget.
+- **Two services, both over HTTPS.** The phone calls Composio's REST API to read your tools and OpenRouter to write the brief. Nothing else is contacted.
+- **Schedules use reminders.** A phone can't run a job at an exact time, so at each scheduled time you get a notification, and the brief is written when you open it or the app. See [Schedules](#schedules).
 
 ## How it works
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** Gmail, Outlook, Google Calendar, Calendly, Google Tasks, Google Drive, Notion, Slack, GitHub, GitLab, Jira, Linear, Asana, Trello, Todoist, HubSpot and Hacker News.
 3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Choose the model in Settings, where cheap models that write well are recommended. Without a key, you get a plain summary of what was read.
-4. **Choose a schedule.** Pick morning or evening briefs, the time, the days and the timezone. The server writes them, and any device can read them.
+4. **Choose a schedule.** Pick morning, afternoon or evening briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
 
 ## What a brief looks like
 
-Every brief, morning or evening, runs in the same order:
+Every brief, morning, afternoon or evening, runs in the same order:
 
 1. **Focus:** the one thing to do first, the goal it moves and what to ignore.
 2. **Signals:** at most 3 things to do, highest priority first, each showing its source and the goal it serves.
@@ -54,41 +53,23 @@ Tap **Update** at the top of the app any time to log what you've done. Updates g
 
 ## Quick start
 
-You need Node 22.13 or newer, and a [Composio API key](https://composio.dev). An [OpenRouter API key](https://openrouter.ai/keys) is optional.
+You need Node 22.13 or newer, Xcode for iOS or Android Studio for Android, and a [Composio API key](https://composio.dev). An [OpenRouter API key](https://openrouter.ai/keys) is optional.
 
 ```bash
 git clone https://github.com/seyhunak/os-app.git
 cd os-app
 npm run setup
-npm run build:web
-npm start
+npm run ios
 ```
 
-The first start prints your server token and saves it in `~/.os-app/token`. Open <http://127.0.0.1:8787>, paste the token, and follow the steps.
+Use `npm run android` for Android. The app walks you through pasting your Composio key, choosing tools and writing your first brief. [SETUP.md](SETUP.md) covers building onto your own phone.
 
-To keep it running on a Mac and reach it from your other devices, follow [SETUP.md](SETUP.md). It covers the background service, Tailscale, web and mobile.
+### Coming from the Mac server
 
-### Try it without any accounts
+Earlier versions ran a server on your Mac, reached over Tailscale. The app no longer needs either. On first launch after updating, it moves what it had saved from your server into its own store: your last 30 briefs, your updates, goals, tools, model, schedules and the OpenRouter key. Anything still waiting to sync is brought along too. Then:
 
-This runs the real server and app against fake tool data. Build the web app first, as above:
-
-```bash
-npm run dev:fake
-```
-
-The token is printed when it starts. Nothing is saved after you stop it.
-
-### Mobile
-
-The web app already works in a phone's browser. For the native app, you need Xcode for iOS or Android Studio for Android:
-
-```bash
-cd app
-export LANG=en_US.UTF-8
-npx expo run:ios
-```
-
-Use `npx expo run:android` for Android. In the app, enter your server's address and token. A phone can't use `127.0.0.1` to reach your computer, so see [Reaching your server from your phone](#reaching-your-server-from-your-phone).
+- **Paste your Composio key once more.** The old phone app never held it, only the server did. Your tool connections live in your Composio account, so they carry over as they are.
+- **Turn the old server off.** See [SETUP.md](SETUP.md#turning-off-the-old-mac-server).
 
 ## What gets read, and where it goes
 
@@ -113,18 +94,30 @@ Use `npx expo run:android` for Android. In the app, enter your server's address 
 | Hacker News | AI-related stories from the front page |
 
 - **Read-only.** OS only calls read operations. It can't send, post or delete anything.
-- **Stored on your server.** Summaries are cached in SQLite for 7 days. Briefs and your updates stay until you delete the database.
+- **Stored on your phone.** Summaries are cached in the app's SQLite database for 7 days. Briefs and your updates stay until you delete them or erase the app's data in Settings.
 - **Sent through OpenRouter, if you add a key.** Those summaries, your goals, your recent updates and the last brief's note go to OpenRouter and the model provider it picks. OS only allows providers that don't train on or store prompts for that purpose. With no key, nothing is sent.
-- **Sent to Composio.** Your tool requests go through Composio, under your own account.
+- **Sent to Composio.** The phone's tool requests go to Composio, under your own account.
 - **Redacted.** Meeting links, passcodes and common token formats are removed before anything is stored or sent.
 
 ## Today's brief, automatically
 
-If the newest brief on the Today screen is from yesterday or earlier, in your phone's local time, the app asks the server for today's morning brief on its own. You keep reading the old one, marked "Writing today's brief…", until the new one arrives.
+If the newest brief on the Today screen is from yesterday or earlier, in your phone's local time, the app writes today's morning brief on its own. You keep reading the old one, marked "Writing today's brief…", until the new one arrives.
 
-- **Same budget as any brief.** The app sends `POST /api/briefs` with `ifStale: true`. The server writes the brief through the same code as a manual one, so each tool is still read at most once a day and today's cached data is reused.
-- **Never twice.** The server checks for a brief from today inside its one-at-a-time queue and returns that one if it exists. Two devices opening at once, a reopened app, or a re-render all end up with one brief. On the device, a failed attempt waits 5 minutes before trying again.
-- **Online only.** Offline, the old brief is marked outdated and nothing is generated. It starts once the server is back.
+- **Same budget as any brief.** It's written through the same code as a manual one, so each tool is still read at most once a day and today's cached data is reused.
+- **Never twice.** Briefs are written one at a time. Before writing, the app checks for a brief from today and uses that one if there is one. A failed attempt waits 5 minutes before trying again.
+
+## Schedules
+
+iOS and Android don't let an app run a job at an exact time, so a schedule works in two halves:
+
+1. **A reminder.** At each scheduled time and day, the phone shows a local notification, such as "Morning brief: Open OS to write it." The app asks for permission to send them when you add your first schedule.
+2. **The brief.** When you tap the reminder, or open the app any time after the scheduled time, the brief for that schedule is written straight away, with the banner "Writing your scheduled brief…".
+
+- **One per schedule per day.** A schedule that has already written today's brief doesn't write it again.
+- **No catching up.** A missed day isn't made up later. Opening the app after a week away writes one brief, not seven.
+- **The latest wins.** If several schedules are due when you open the app, the latest one is written, since it reads the freshest picture of the day.
+- **Phone time.** Schedules use your phone's timezone.
+- **Without notifications.** If you turn reminders off, schedules still work. The brief is written the next time you open the app after its time.
 
 ## Rules OS follows
 
@@ -172,92 +165,26 @@ How the chain behaves:
 - **You can see who wrote it.** A brief written by any model other than yours says so under its title, such as "Written by baidu/ernie-5.5-flash-preview:free, a free model."
 - **The reason is given when every model fails.** You get a plain brief that says why, such as "the free models were busy or unavailable, and the OpenRouter key is out of credit or over its budget for paid models."
 
-The phone uses the same order for offline briefs, from a free model list it saves from the server's status (`freeModels` in `GET /api/status`). It goes round only once, so it can fall back to the plain brief within its 2 minute limit.
-
-### One key, online and offline
-
-The key you save in Settings is used by the server for scheduled and manual briefs, and by the phone for briefs written while the server is out of reach. You paste it once:
-
-- Saving the key in the iPhone or Android app also stores it in that phone's Keychain or Keystore.
-- Any other phone signed in to your server copies it from the server at its next sync, through `GET /api/credentials/openrouter`, which needs the server token like every other route.
-- Removing or replacing the key in Settings does the same on every phone at its next sync.
-
-The web app never keeps the key, since a browser has no secure place for it.
-
-## Reaching your server from your phone
-
-The server listens on `127.0.0.1` by default. To use it from other devices, put it behind HTTPS. [Tailscale](https://tailscale.com) is the simplest way, and keeps it private to your own devices:
-
-```bash
-tailscale serve --bg --https=8443 8787
-```
-
-Use `tailscale serve`, not `tailscale funnel`, which would put it on the public internet. Any device signed in to your tailnet can then open the web app at `https://<machine>.<tailnet>.ts.net:8443`, and that same address works in the mobile app.
-
-To prefill the address in the mobile app, put it in `app/.env` before building:
-
-```bash
-EXPO_PUBLIC_OS_URL=https://<machine>.<tailnet>.ts.net:8443
-```
-
-The address is built into the app, so don't publish a build made this way. Never put your token in that file, because `.env` also feeds the web build, which the server hands out without a login.
-
-To prefill the token too, on a build only for your own phone, set it just for that build command:
-
-```bash
-EXPO_PUBLIC_OS_TOKEN="$(cat ~/.os-app/token)" npx expo run:ios --device
-```
-
-Anyone who gets that build can read the token from it, so never share it.
-
-The app refuses plain `http://` for any address outside your local network, so your token isn't sent unencrypted.
-
 ## Offline
 
-Your server runs on your own machine, so it can be out of reach. Web and mobile keep working when it is:
+Everything you've saved is on the phone, so your briefs, updates, goals and schedules are always readable. Writing a brief needs the internet, to read your tools and reach OpenRouter.
 
-- **Startup:** when the app opens, it checks the server with a hard 3 second limit before loading anything. If there's no answer in time, it opens straight into offline mode with your saved briefs, updates and goals, and a banner saying you're offline.
-- **Foreground:** each time you return to the app, it checks again. When the server answers, it switches back online and syncs without a restart.
+- **No internet:** tools you've already read today are reused from the cache. The others are named as failed in the brief, and OS waits an hour before calling them again. If OpenRouter can't be reached, you get a plain brief in the same layout that says why.
+- **Updates and goals:** saved on the phone at once, with or without a connection.
 
-- **Read:** your last 30 briefs, goals, schedules and updates are saved on each device.
-- **Write:** updates, goal edits and brief deletes made offline go into a queue on the device and count as saved at once. Online, saving waits at most 4 seconds for the server, so a dead connection never hangs Save. The queue is sent oldest first, once each, when the server is back. Updates keep the time you wrote them. If two devices edit goals offline, the last one to sync wins.
-- **New briefs:** offline, the phone writes the brief itself from your goals, your updates (synced or not) and the last scan's summaries. No tools are read. It uses the server's own brief rules, cached on the phone, with the same OpenRouter key and the same free-first order of models, so it reads like any other brief. Each free model gets 40 seconds. Without a key, or if no model writes it within 2 minutes, you get a plain brief in the same layout. Offline drafts are labelled, and stored on the server as they are once it's back, without spending the daily tool budget. The app then asks for today's real brief once.
-- **Earlier editions:** swipe a brief left to delete it, or use Delete all. The server archives them rather than deleting, and deletes made offline are queued.
-- **Status:** Settings → Server shows the machine's name and whether it's online. The app checks every 30 seconds, so a lost connection can take up to about 40 seconds to show. Expand it to see the full address and token.
-- **Reconnect:** the app checks for your server every 10 seconds while offline. When it's back, it sends what's queued and fetches anything new, such as briefs written on schedule.
-- **Needs your server:** reading your tools, Refetch, and changing schedules, tools, keys or the model.
-- **Can't save:** offline, a read that was never saved on this device, such as on first launch, shows an error with Try again.
+## Your data
 
-Saved content is stored in the app's own storage, or in the browser's on web, without extra encryption. "Disconnect this device" removes it.
-
-## Configuration
-
-Everything is optional. These are the variable names. Never commit their values.
-
-| Variable | Where | What it does |
-|---|---|---|
-| `COMPOSIO_API_KEY` | server | Composio key. You can add it in the app instead |
-| `OPENROUTER_API_KEY` | server | OpenRouter key. You can add it in the app instead |
-| `OS_MODEL` | server | OpenRouter model until you choose one in Settings |
-| `OS_COMPOSIO_USER_ID` | server | Composio user ID, if your accounts already exist under another |
-| `OS_TOKEN` | server | Fixes the server token instead of generating one |
-| `OS_DATA_DIR` | server | Where the database and token live. Defaults to `~/.os-app` |
-| `OS_WEB_DIR` | server | Where the built web app is served from |
-| `HOST`, `PORT` | server | Listen address. Defaults to `127.0.0.1` and `8787` |
-| `EXPO_PUBLIC_OS_URL` | app | Prefills the server address in a build |
-
- Copy [.env.example](.env.example) to `server/.env`, which is git-ignored and loaded at startup, or add your keys in the app. Each brief is capped at 4,000 output tokens. `OS_MODEL` sets the OpenRouter model until you choose one in Settings. If your connected accounts already exist in Composio under another user ID, set `OS_COMPOSIO_USER_ID` to match it.
-
-Schedules only run while the server is running, and a brief missed during downtime isn't made up later. On a Mac, `sh scripts/install-macos-service.sh` keeps it running, including after restarts. Elsewhere, use `systemd` or similar.
+Settings → Your data → "Erase everything on this phone" removes your keys, goals, updates, briefs and schedules from the device, and cancels its reminders. Your tool connections stay in your Composio account. Manage those at [composio.dev](https://composio.dev).
 
 ## Project layout
 
 ```
-server/   Hono API, SQLite, scheduler, Composio and OpenRouter. Also hosts the web app.
-app/      Expo app for web, iOS and Android.
+app/              Expo app for iOS and Android.
+app/src/core/     What runs a brief: the SQLite store, collectors, Composio and OpenRouter calls, schedules.
+app/src/screens/  The Today, Schedule and Settings screens, and onboarding.
 ```
 
-To add a tool, add an entry to `TOOLKITS` in [server/src/collectors.ts](server/src/collectors.ts). A collector only reads, returns short facts rather than raw API responses, and can sum up what it read in a sentence or two.
+To add a tool, add an entry to `TOOLKITS` in [app/src/core/collectors.ts](app/src/core/collectors.ts). A collector only reads, returns short facts rather than raw API responses, and can sum up what it read in a sentence or two.
 
 ## Development
 
@@ -266,9 +193,9 @@ npm test
 npm run typecheck
 ```
 
-`npm run setup` also turns on a commit check that blocks `.env` files, databases, and anything that looks like an API key or a private Tailscale address.
+`npm run setup` also turns on a commit check that blocks `.env` files, databases, and anything that looks like an API key.
 
-`npm test` runs the server tests (Vitest) and the app tests (`node:test` through `tsx`), including the 3 second startup check against a server that never answers.
+`npm test` runs the app tests (`node:test` through `tsx`). The core's store runs on `node:sqlite` in the tests and on `expo-sqlite` on the phone, with the same SQL.
 
 ## Contributing
 
@@ -277,17 +204,17 @@ Issues and pull requests are welcome. Please:
 - Run `npm run setup` once, so the commit check is on.
 - Keep `npm test` and `npm run typecheck` passing, and add a test for new behaviour.
 - Keep tool reads within the once-a-day budget, and never add write operations to a collector.
-- Never include real keys, tokens, `.env` files, databases, briefs or Tailscale addresses, even in issues.
+- Never include real keys, `.env` files, databases or briefs, even in issues.
 
 Reporting a security problem? See [SECURITY.md](SECURITY.md).
 
 ## Current limits
 
-- One person per server. There are no user accounts.
-- Android builds haven't been tested yet. Web and iOS have.
+- One person per phone. Briefs don't sync between devices.
+- No web app. A browser has no safe place to keep your API keys.
+- Scheduled briefs are written when you open the app or its reminder, not in the background.
+- Android builds haven't been tested yet. iOS has.
 - Free models and the default paid model are cheap and can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't yours.
-- Offline briefs don't read your tools, so they only know what the last scan saw.
-- No push notifications yet, so you open the app to read a scheduled brief.
 - Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. A tool that fails is named in the brief.
 - Calendars cover this week only, through Sunday, so next week's meetings don't appear until Monday. Email covers your last 5 from the last 3 days.
 - You can select tools from the list above. Other Composio tools need a collector first.
@@ -297,4 +224,4 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 
 [MIT](LICENSE)
 
-The app bundles the [Newsreader](https://fonts.google.com/specimen/Newsreader) and [Libre Franklin](https://fonts.google.com/specimen/Libre+Franklin) fonts, under the SIL Open Font License.
+The app uses Hallmark's Console theme and bundles the [Host Grotesk](https://fonts.google.com/specimen/Host+Grotesk) and [Atkinson Hyperlegible Mono](https://fonts.google.com/specimen/Atkinson+Hyperlegible+Mono) fonts, under the SIL Open Font License.

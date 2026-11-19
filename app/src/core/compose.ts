@@ -1,4 +1,13 @@
-import type { Kind, SourceReport } from './db.ts';
+import type { Kind, SourceReport } from './db';
+
+/** AbortSignal.timeout isn't in every React Native runtime, so this does the same with a timer. */
+export function timeoutSignal(ms: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  // In Node (tests) a pending timer would keep the process alive. React Native has no unref.
+  (timer as { unref?(): void }).unref?.();
+  return controller.signal;
+}
 
 export const SOURCES_MARKER = '{{SOURCES}}';
 export const DEFAULT_MODEL = 'qwen/qwen3.7-flash';
@@ -104,14 +113,14 @@ ${noteGuide}`;
 
 const STRUCTURE: Record<Kind, string> = {
   morning: template('Good morning', 'The one thing to do first and the goal it moves, then what to ignore today.', 'What to do today.', 'One or two lines: what the next brief should check first.'),
+  afternoon: template('Good afternoon', 'What has moved since this morning, and the one thing to finish before the day ends.', 'What still needs doing today, given what has already happened.', 'One or two lines: what the evening brief should check, and anything to hand over to tomorrow.'),
   evening: template('Good evening', 'Which goal moved today, or that none did, and the one thing to start with tomorrow.', 'What mattered today and how each one ended, based only on the evidence.', 'One or two lines: what to start with tomorrow, with a carry or drop decision for anything unfinished.'),
 };
 
 /**
- * The rules and layout, for a phone that writes a brief itself while the server is out of reach.
- * It caches these, so offline briefs follow the same rules without a second copy to keep in step.
+ * The rules and layout every brief is written with, as one object.
  */
-export const briefPrompt = () => ({ system: { morning: `${SHARED_RULES}\n\n${STRUCTURE.morning}`, evening: `${SHARED_RULES}\n\n${STRUCTURE.evening}` }, maxTokens: MAX_OUTPUT_TOKENS, sourcesMarker: SOURCES_MARKER });
+export const briefPrompt = () => ({ system: { morning: `${SHARED_RULES}\n\n${STRUCTURE.morning}`, afternoon: `${SHARED_RULES}\n\n${STRUCTURE.afternoon}`, evening: `${SHARED_RULES}\n\n${STRUCTURE.evening}` }, maxTokens: MAX_OUTPUT_TOKENS, sourcesMarker: SOURCES_MARKER });
 
 const escapeTags = (text: string) => text.replaceAll('<', '\\u003c').replaceAll('>', '\\u003e');
 
@@ -214,7 +223,7 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
       const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-        signal: AbortSignal.timeout(isFree(id) ? FREE_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
+        signal: timeoutSignal(isFree(id) ? FREE_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           model: id,
           max_tokens: reasoning.enabled === false || !isFree(id) ? MAX_OUTPUT_TOKENS : FREE_THINKING_TOKENS,
@@ -344,7 +353,7 @@ export const canRecommend = (id: string, price: number) =>
  * list stays cheap but capable as new models appear, with no list of names to keep up to date.
  */
 export async function listOpenRouterModels(apiKey: string): Promise<ModelOption[]> {
-  const response = await fetch(`${OPENROUTER_URL}/models/user`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(`${OPENROUTER_URL}/models/user`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: timeoutSignal(15_000) });
   if (!response.ok) throw new OpenRouterError(response.status, `HTTP ${response.status}`);
   const { data } = (await response.json()) as { data?: OpenRouterModel[] };
   const cost = (m: OpenRouterModel) => (Number(m.pricing?.prompt ?? 0) + Number(m.pricing?.completion ?? 0)) * 1_000_000;
@@ -371,7 +380,7 @@ export async function listOpenRouterModels(apiKey: string): Promise<ModelOption[
 export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
   const response = await fetch(`${OPENROUTER_URL}/key`, {
     headers: { Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(15_000),
+    signal: timeoutSignal(15_000),
   });
   if (!response.ok) throw new OpenRouterError(response.status, `HTTP ${response.status}`);
 }
@@ -393,12 +402,14 @@ export function describeComposeError(error: unknown): string {
   return error instanceof Error ? error.message : 'the AI step failed';
 }
 
+export const GREETING: Record<Kind, string> = { morning: 'Good morning', afternoon: 'Good afternoon', evening: 'Good evening' };
+
 /** No AI: the same layout, with no judgment about what matters. Sources summarize what was read. */
 export function renderDigest(input: BriefInput, reason: string): string {
   const goals = input.goals.split('\n').map((g) => g.trim()).filter(Boolean).map((g) => `- ⚪ ${g.replace(/^[-*]\s*/, '')}`);
   const updates = input.updates.map((u) => `- ${u.at}: ${u.text}`);
   return [
-    `# ${input.kind === 'morning' ? 'Good morning' : 'Good evening'}`,
+    `# ${GREETING[input.kind]}`,
     `> Unranked digest: ${reason}. Ranking, left-out items and goal status need an AI model, so they are left out rather than guessed.`,
     `### Signals\n${input.previousNote ? `From your last brief: ${input.previousNote}\n\n` : ''}${Object.values(input.facts).some((items) => items.length) ? 'Nothing is marked as a signal, because nothing was ranked. Sources below sum up what was read.' : 'Nothing was found in your tools.'}`,
     `### Goals\n${goals.join('\n') || 'No goals set yet. Paste them in Settings.'}${updates.length ? `\n\n**Your updates:**\n${updates.join('\n')}` : ''}`,

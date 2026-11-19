@@ -1,4 +1,4 @@
-import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio.ts';
+import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
 
 export interface Toolkit {
   slug: string;

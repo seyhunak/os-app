@@ -1,20 +1,20 @@
-import { Newsreader_400Regular, Newsreader_400Regular_Italic, Newsreader_600SemiBold } from '@expo-google-fonts/newsreader';
-import { LibreFranklin_400Regular, LibreFranklin_500Medium, LibreFranklin_700Bold } from '@expo-google-fonts/libre-franklin';
+import { HostGrotesk_400Regular, HostGrotesk_500Medium, HostGrotesk_600SemiBold } from '@expo-google-fonts/host-grotesk';
+import { AtkinsonHyperlegibleMono_400Regular, AtkinsonHyperlegibleMono_500Medium } from '@expo-google-fonts/atkinson-hyperlegible-mono';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Platform, Pressable, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { AppState, Pressable, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ApiError, type Status } from './src/api';
-import { ConnectionContext, createOfflineApi, useConnection } from './src/offline';
-import { ComposioScreen, FirstBriefScreen, isOnboarded, PairScreen, ToolsScreen } from './src/screens/Onboarding';
+import * as Notifications from 'expo-notifications';
+import type { Api, Status } from './src/api';
+import { openOs } from './src/device';
+import { RefreshContext } from './src/refresh';
+import { ComposioScreen, FirstBriefScreen, isOnboarded, ToolsScreen } from './src/screens/Onboarding';
 import { SchedulesScreen } from './src/screens/Schedules';
 import { SettingsScreen } from './src/screens/Settings';
 import { TodayScreen } from './src/screens/Today';
 import { UpdateModal } from './src/UpdateModal';
-import { takeLinkToken } from './src/linkToken';
-import { clearConnection, loadConnection, type Connection } from './src/storage';
-import { Button, ErrorNote, F, Loading, message, Screen, ThemeProvider, Title, useColors } from './src/ui';
+import { ErrorNote, F, Loading, message, Screen, ThemeProvider, Title, useColors } from './src/ui';
 
 type Tab = 'today' | 'schedule' | 'settings';
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -41,12 +41,12 @@ function Header({ onUpdate }: { onUpdate(): void }) {
   const c = useColors();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.bg }}>
-      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 24 }}>OS</Text>
+      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 22, letterSpacing: -0.6 }}>OS</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Add an update"
         onPress={onUpdate}
-        style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 18, borderRadius: 4, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.8 : 1 })}
+        style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 18, borderRadius: 6, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.8 : 1 })}
       >
         <Text style={{ color: c.onAccent, fontFamily: F.sansMedium, fontSize: 15 }}>Update</Text>
       </Pressable>
@@ -54,94 +54,94 @@ function Header({ onUpdate }: { onUpdate(): void }) {
   );
 }
 
-const noSubscribe = () => () => undefined;
-const noState = () => null;
-
-/** Says when you're reading saved content, and what's waiting to be sent. */
-function ConnectionBanner({ onRetry }: { onRetry(): void }) {
+/** Says a scheduled brief is being written, so the Today screen's wait makes sense. */
+function ScheduledBanner({ writing }: { writing: boolean }) {
   const c = useColors();
-  const { online, syncing, pending, savedAt } = useConnection();
-  if (online && !syncing && !pending) return null;
-  const when = savedAt ? new Date(savedAt).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' }) : null;
-  const waiting = pending ? `${pending === 1 ? '1 change' : `${pending} changes`} will sync when your Mac is back.` : 'Changes sync when your Mac is back.';
-  const message = !online ? `Offline${when ? `, showing what was saved ${when}` : ''}. ${waiting}` : 'Back online. Syncing…';
+  if (!writing) return null;
   return (
-    <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.accentSoft }}>
-      <Text style={{ flex: 1, color: c.text, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{message}</Text>
-      {!online ? (
-        <Pressable accessibilityRole="button" onPress={onRetry} style={{ minHeight: 44, minWidth: 44, alignItems: 'center', justifyContent: 'center' }}>
-          <Text style={{ color: c.text, fontFamily: F.sansBold, fontSize: 13 }}>Try now</Text>
-        </Pressable>
-      ) : null}
+    <View accessibilityLiveRegion="polite" style={{ paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.deep, borderBottomWidth: 1, borderColor: c.line }}>
+      <Text style={{ color: c.text, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>Writing your scheduled brief…</Text>
     </View>
   );
 }
 
 function Root() {
   const c = useColors();
-  const [connection, setConnection] = useState<Connection | null | undefined>(undefined);
+  const [api, setApi] = useState<Api | null>(null);
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toolsDone, setToolsDone] = useState(false);
   const [tab, setTab] = useState<Tab>('today');
   const [updating, setUpdating] = useState(false);
-  const api = useMemo(() => (connection ? createOfflineApi(connection) : null), [connection]);
-  const connectionState = useSyncExternalStore(api?.subscribe ?? noSubscribe, api?.getState ?? noState);
+  const [refresh, setRefresh] = useState({ refreshKey: 0, writingScheduled: false });
 
-  const refresh = useCallback(async () => {
+  useEffect(() => {
+    openOs().then(setApi, (e) => setError(message(e)));
+  }, []);
+
+  const reload = useCallback(async () => {
     if (!api) return;
     try {
       setStatus(await api.status());
       setError(null);
     } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        await clearConnection();
-        setConnection(null);
-      } else {
-        setError(message(e));
-      }
+      setError(message(e));
     }
   }, [api]);
+  useEffect(() => {
+    void reload();
+  }, [reload, refresh.refreshKey]);
 
+  /** Writes a scheduled brief whose time has passed, when the app opens, comes back, or a reminder is tapped. */
+  const running = useRef(false);
+  const runDue = useCallback(async () => {
+    if (!api || running.current) return;
+    running.current = true;
+    try {
+      if (!api.hasDueSchedule()) return;
+      setRefresh((r) => ({ ...r, writingScheduled: true }));
+      const brief = await api.runDueSchedule().catch(() => null);
+      setRefresh((r) => ({ refreshKey: r.refreshKey + (brief ? 1 : 0), writingScheduled: false }));
+    } finally {
+      running.current = false;
+    }
+  }, [api]);
   useEffect(() => {
-    void loadConnection().then((saved) => {
-      // Already connected: drop a #token= link's token from the address bar instead of leaving it there.
-      if (saved && Platform.OS === 'web') takeLinkToken();
-      setConnection(saved);
-    });
-  }, []);
-  useEffect(() => {
-    void refresh();
-  }, [refresh, connectionState?.refreshKey]);
-  useEffect(() => api?.start(), [api]);
+    if (!api || !status || !isOnboarded(status)) return;
+    void runDue();
+    const appState = AppState.addEventListener('change', (next) => next === 'active' && void runDue());
+    const tapped = Notifications.addNotificationResponseReceivedListener(() => void runDue());
+    return () => {
+      appState.remove();
+      tapped.remove();
+    };
+    // Starts once onboarding is done; status changes after that don't restart it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [api, runDue, status && isOnboarded(status)]);
 
   const body = () => {
-    if (connection === undefined) return <Loading label="Starting…" />;
-    if (!connection || !api) return <PairScreen onPaired={setConnection} />;
-    if (!status) {
+    if (!api || !status) {
       return error ? (
         <Screen>
-          <Title>Can't reach your server</Title>
+          <Title>OS couldn't start</Title>
           <ErrorNote message={error} />
-          <Button label="Try again" onPress={() => void refresh()} />
-          <Button label="Use a different server" variant="secondary" onPress={() => void clearConnection().then(() => setConnection(null))} />
         </Screen>
-      ) : <Loading label="Connecting…" />;
+      ) : <Loading label="Starting…" />;
     }
     if (!isOnboarded(status)) {
-      if (!status.composio) return <ComposioScreen api={api} onDone={() => void refresh()} />;
-      if (!status.selectedToolkits.length || !toolsDone) return <ToolsScreen api={api} onDone={() => { setToolsDone(true); void refresh(); }} />;
-      return <FirstBriefScreen api={api} status={status} onDone={() => { setTab('today'); void refresh(); }} />;
+      if (!status.composio) return <ComposioScreen api={api} onDone={() => void reload()} />;
+      if (!status.selectedToolkits.length || !toolsDone) return <ToolsScreen api={api} onDone={() => { setToolsDone(true); void reload(); }} />;
+      return <FirstBriefScreen api={api} status={status} onDone={() => { setTab('today'); void reload(); }} />;
     }
     return (
       <>
         <Header onUpdate={() => setUpdating(true)} />
-        <ConnectionBanner onRetry={() => void api.sync()} />
+        <ScheduledBanner writing={refresh.writingScheduled} />
         <UpdateModal api={api} visible={updating} onClose={() => setUpdating(false)} />
         <View style={{ flex: 1 }}>
           {tab === 'today' ? <TodayScreen api={api} hasSchedules={status.hasSchedules} onSchedule={() => setTab('schedule')} /> : null}
-          {tab === 'schedule' ? <SchedulesScreen api={api} onChanged={() => void refresh()} /> : null}
-          {tab === 'settings' ? <SettingsScreen api={api} status={status} connection={connection} onChanged={() => void refresh()} onSignOut={() => { setStatus(null); setConnection(null); }} /> : null}
+          {tab === 'schedule' ? <SchedulesScreen api={api} onChanged={() => void reload()} /> : null}
+          {tab === 'settings' ? <SettingsScreen api={api} status={status} onChanged={() => void reload()} /> : null}
         </View>
         <TabBar tab={tab} onChange={setTab} />
       </>
@@ -149,39 +149,23 @@ function Root() {
   };
 
   return (
-    <ConnectionContext.Provider value={connectionState}>
+    <RefreshContext.Provider value={refresh}>
       <SafeAreaView edges={['top', 'left', 'right']} style={{ flex: 1, backgroundColor: c.bg }}>
         {body()}
       </SafeAreaView>
-    </ConnectionContext.Provider>
+    </RefreshContext.Provider>
   );
-}
-
-/** Lets the web app itself load without your Mac. Mobile apps already carry their own code. */
-function registerOfflineWeb() {
-  if (Platform.OS !== 'web' || !('serviceWorker' in navigator)) return;
-  void navigator.serviceWorker.register('/sw.js').then(() => navigator.serviceWorker.ready).then(async () => {
-    // This page loaded before the worker started, so save what it already fetched.
-    const urls = performance.getEntriesByType('resource').map((r) => r.name).filter((u) => {
-      const { origin, pathname } = new URL(u);
-      return origin === location.origin && !pathname.startsWith('/api/');
-    });
-    const cache = await caches.open('os-app-v1');
-    await Promise.allSettled(['/', ...urls].map((u) => cache.add(u)));
-  }).catch(() => undefined);
 }
 
 export default function App() {
   // Falls back to system fonts if loading fails, rather than leaving a blank screen.
   const [fontsLoaded, fontError] = useFonts({
-    Newsreader_400Regular,
-    Newsreader_400Regular_Italic,
-    Newsreader_600SemiBold,
-    LibreFranklin_400Regular,
-    LibreFranklin_500Medium,
-    LibreFranklin_700Bold,
+    HostGrotesk_400Regular,
+    HostGrotesk_500Medium,
+    HostGrotesk_600SemiBold,
+    AtkinsonHyperlegibleMono_400Regular,
+    AtkinsonHyperlegibleMono_500Medium,
   });
-  useEffect(registerOfflineWeb, []);
   if (!fontsLoaded && !fontError) return null;
 
   return (

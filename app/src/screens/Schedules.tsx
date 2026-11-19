@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Switch, Text, View } from 'react-native';
 import type { Api, Schedule, ScheduleInput } from '../api';
-import { useConnection } from '../offline';
+import { useRefresh } from '../refresh';
 import { describeDays, ScheduleEditor } from '../ScheduleEditor';
 import { Body, Button, Card, ErrorNote, Loading, message, Screen, Title, useColors, F } from '../ui';
 
@@ -25,7 +25,7 @@ export function SchedulesScreen({ api, onChanged }: { api: Api; onChanged(): voi
     }
   }, [api]);
 
-  const { refreshKey } = useConnection();
+  const { refreshKey } = useRefresh();
   useEffect(() => {
     void load();
   }, [load, refreshKey]);
@@ -49,7 +49,7 @@ export function SchedulesScreen({ api, onChanged }: { api: Api; onChanged(): voi
   return (
     <Screen>
       <Title>Schedule</Title>
-      <Body muted>Your server writes briefs at these times, so it needs to be running then. Open any device to read them.</Body>
+      <Body muted>At each time, this phone reminds you, and the brief is written when you open the reminder or the app. Allow notifications to get the reminders.</Body>
       <ErrorNote message={error} />
       {schedules.map((s) => editing === s.id ? (
         <ScheduleEditor key={s.id} initial={toInput(s)} submitLabel="Save changes" onCancel={() => setEditing(null)} onSubmit={(input) => after(api.updateSchedule(s.id, input))} />
@@ -57,8 +57,8 @@ export function SchedulesScreen({ api, onChanged }: { api: Api; onChanged(): voi
         <Card key={s.id}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
             <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ color: c.text, fontSize: 20, fontFamily: F.sansBold }}>{s.time} · {s.kind === 'morning' ? 'Morning' : 'Evening'}</Text>
-              <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14 }}>{describeDays(s.days)} · {s.timezone}</Text>
+              <Text style={{ color: c.text, fontSize: 20, fontFamily: F.sansBold }}>{s.time} · {s.kind[0]!.toUpperCase() + s.kind.slice(1)}</Text>
+              <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14 }}>{describeDays(s.days)}</Text>
             </View>
             <Switch accessibilityLabel={`${s.kind} brief at ${s.time} on or off`} value={s.enabled} onValueChange={(v) => setEnabled(s, v)} trackColor={{ true: c.accent }} />
           </View>

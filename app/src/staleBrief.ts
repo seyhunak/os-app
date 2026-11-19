@@ -11,67 +11,53 @@ export function isStale(createdAt: string, now: Date): boolean {
   return localDay(new Date(createdAt)) < localDay(now);
 }
 
-export type Freshness = 'none' | 'fresh' | 'stale-online' | 'stale-offline';
+export type Freshness = 'none' | 'fresh' | 'stale';
 
-type Dated = Pick<Brief, 'createdAt' | 'trigger'>;
-
-/**
- * The brief that decides whether today's is needed. Online, an offline draft doesn't count,
- * because it never read your tools: the server should still write today's real one. Offline,
- * any brief counts, so the device writes at most one draft a day.
- */
-export function relevantBrief<T extends Dated>(briefs: T[], online: boolean): T | undefined {
-  return online ? briefs.find((b) => b.trigger !== 'offline') : briefs[0];
-}
+type Dated = Pick<Brief, 'createdAt'>;
 
 /** What the Today screen should do about the newest brief. Briefs are newest first. */
-export function freshness(briefs: Dated[], online: boolean, now: Date): Freshness {
+export function freshness(briefs: Dated[], now: Date): Freshness {
   if (!briefs.length) return 'none';
-  const latest = relevantBrief(briefs, online);
-  if (latest && !isStale(latest.createdAt, now)) return 'fresh';
-  return online ? 'stale-online' : 'stale-offline';
+  return isStale(briefs[0]!.createdAt, now) ? 'stale' : 'fresh';
 }
 
 /** After a failed attempt, wait this long before trying again on its own. */
 export const RETRY_AFTER_FAILURE_MS = 5 * 60_000;
 
 export interface AutoBriefOptions {
-  /** Online: asks the server for today's brief. Offline: writes a draft on this device. */
-  generate(online: boolean): Promise<Brief>;
+  /** Writes today's brief: the one a schedule is due for, or else a morning brief. */
+  generate(): Promise<Brief>;
   now?(): Date;
 }
 
 /**
- * Starts today's brief at most once per day for each mode, however often the screen renders or
- * reopens. So an offline morning gets one draft, and coming back online gets one real brief.
- * One of these lives per server connection, so remounting the Today screen keeps the guard.
+ * Starts today's brief at most once per day, however often the screen renders or reopens.
+ * One of these lives for the app's lifetime, so remounting the Today screen keeps the guard.
  */
 export function createAutoBrief({ generate, now = () => new Date() }: AutoBriefOptions) {
   let inFlight: Promise<Brief> | null = null;
-  const doneDay: Record<'online' | 'offline', string | null> = { online: null, offline: null };
-  const failedAt: Record<'online' | 'offline', number> = { online: 0, offline: 0 };
+  let doneDay: string | null = null;
+  let failedAt = 0;
 
   return {
     /**
      * Returns the running or newly started request when today's brief is needed, or null when
      * nothing should happen: there's already one for today, there are no briefs at all yet,
-     * today's was already written in this mode, or a recent attempt failed.
+     * today's was already written, or a recent attempt failed.
      */
-    maybeGenerate(briefs: Dated[], online: boolean): Promise<Brief> | null {
+    maybeGenerate(briefs: Dated[]): Promise<Brief> | null {
       if (inFlight) return inFlight;
       const at = now();
-      const mode = online ? 'online' : 'offline';
-      const state = freshness(briefs, online, at);
-      if (state === 'none' || state === 'fresh') return null;
-      if (doneDay[mode] === localDay(at)) return null;
-      if (at.getTime() - failedAt[mode] < RETRY_AFTER_FAILURE_MS) return null;
-      inFlight = generate(online).then(
+      if (freshness(briefs, at) !== 'stale') return null;
+      if (doneDay === localDay(at)) return null;
+      if (at.getTime() - failedAt < RETRY_AFTER_FAILURE_MS) return null;
+      inFlight = generate().then(
         (brief) => {
-          doneDay[mode] = localDay(at);
+          doneDay = localDay(at);
           return brief;
         },
         (error) => {
-          failedAt[mode] = now().getTime();
+          failedAt = now().getTime();
           throw error;
         },
       ).finally(() => {
@@ -88,11 +74,11 @@ export type AutoBrief = ReturnType<typeof createAutoBrief>;
 
 const perApi = new WeakMap<object, AutoBrief>();
 
-/** The guard for this connection, created on first use. */
-export function autoBriefFor(api: { generateTodayBrief(kind: 'morning'): Promise<Brief>; writeOfflineBrief(kind: 'morning'): Promise<Brief> }): AutoBrief {
+/** The guard for this app, created on first use. */
+export function autoBriefFor(api: { generateTodayBrief(kind: 'morning'): Promise<Brief> }): AutoBrief {
   let auto = perApi.get(api);
   if (!auto) {
-    auto = createAutoBrief({ generate: (online) => (online ? api.generateTodayBrief('morning') : api.writeOfflineBrief('morning')) });
+    auto = createAutoBrief({ generate: () => api.generateTodayBrief('morning') });
     perApi.set(api, auto);
   }
   return auto;
