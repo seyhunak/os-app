@@ -1,6 +1,6 @@
 import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Linking, Platform, Pressable, Text, View } from 'react-native';
+import { AppState, Linking, Pressable, Text, View } from 'react-native';
 import { COMPOSIO_URL, type Api, type Toolkit } from './api';
 import { Button, Card, ErrorNote, Loading, message, useColors, F } from './ui';
 
@@ -78,7 +78,7 @@ export function ToolList({ api, onChange }: { api: Api; onChange?(toolkits: Tool
   };
 
   const open = async (url: string) => {
-    await (Platform.OS === 'web' ? Linking.openURL(url) : WebBrowser.openBrowserAsync(url));
+    await WebBrowser.openBrowserAsync(url);
   };
 
   const connect = async (toolkit: Toolkit) => {

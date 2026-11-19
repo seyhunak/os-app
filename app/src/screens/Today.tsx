@@ -3,7 +3,8 @@ import { Pressable, Text, useWindowDimensions, View, type TextStyle } from 'reac
 import type { Brief, Kind, LedgerEntry, Source } from '../api';
 import { Markdown } from '../Markdown';
 import { SwipeRow } from '../SwipeRow';
-import { useConnection, type OfflineApi } from '../offline';
+import type { Api } from '../api';
+import { useRefresh } from '../refresh';
 import { autoBriefFor, freshness } from '../staleBrief';
 import { parseBrief, type Goal, type GoalStatus, type NoiseItem, type ParsedBrief, type Priority } from '../parseBrief';
 import { Button, ErrorNote, F, Loading, message, R, Screen, useColors, type Colors } from '../ui';
@@ -115,7 +116,7 @@ function Masthead({ brief, wide }: { brief: Brief; wide: boolean }) {
   const c = useColors();
   const meta: TextStyle = { color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 };
   const how = brief.trigger === 'offline'
-    ? `offline draft on this device${brief.pending ? ', syncs when your Mac is back' : ''}`
+    ? 'offline draft'
     : brief.trigger === 'schedule' ? 'on schedule' : 'on request';
   return (
     <View style={{ gap: 6 }}>
@@ -425,11 +426,11 @@ function FrontPage({ brief, wide, ledger }: { brief: Brief; wide: boolean; ledge
 }
 
 /** Shown above a brief from an earlier day: either today's is being written, or it can't be yet. */
-function StaleNote({ brief, generating, online }: { brief: Brief; generating: boolean; online: boolean }) {
+function StaleNote({ brief, generating }: { brief: Brief; generating: boolean }) {
   const c = useColors();
-  const showing = brief.trigger === 'offline' ? 'your offline draft' : shortDate(brief.createdAt);
+  const showing = shortDate(brief.createdAt);
   const text = generating
-    ? online ? `Writing today's brief with fresh tool data… Showing ${showing} until it's ready.` : `Writing today's draft on this device… Showing ${showing} until it's ready.`
+    ? `Writing today's brief with fresh tool data… Showing ${showing} until it's ready.`
     : `Outdated: this brief is from ${shortDate(brief.createdAt)}. Write a new one below.`;
   return (
     <View accessibilityLiveRegion="polite" style={{ flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderLeftWidth: 3, borderColor: c.line, borderLeftColor: generating ? c.cool : c.danger, borderRadius: R.control, backgroundColor: c.card, paddingHorizontal: 12, paddingVertical: 10 }}>
@@ -438,7 +439,7 @@ function StaleNote({ brief, generating, online }: { brief: Brief; generating: bo
   );
 }
 
-export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi; hasSchedules: boolean; onSchedule(): void }) {
+export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSchedules: boolean; onSchedule(): void }) {
   const c = useColors();
   const { width } = useWindowDimensions();
   const wide = width >= TWO_COLUMNS_AT;
@@ -446,7 +447,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
   const [openId, setOpenId] = useState<number | null>(null);
   const [busy, setBusy] = useState<Kind | 'refresh' | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { online, refreshKey } = useConnection();
+  const { refreshKey } = useRefresh();
   const auto = useMemo(() => autoBriefFor(api), [api]);
   const [generating, setGenerating] = useState(() => auto.pending() !== null);
   const [ledger, setLedger] = useState<LedgerEntry[] | null>(null);
@@ -460,7 +461,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
     }
   }, [api]);
 
-  /** Picks up a brief the Mac saved after this device stopped waiting for it. Keeps the error shown. */
+  /** Reloads the list after a failure, keeping the error shown. */
   const reloadQuietly = useCallback(() => {
     api.briefs().then(({ briefs: list }) => setBriefs(list), () => undefined);
   }, [api]);
@@ -478,7 +479,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
   // screen, so re-renders, tab switches and reopening the app join the same request.
   useEffect(() => {
     if (!briefs) return;
-    const request = auto.maybeGenerate(briefs, online);
+    const request = auto.maybeGenerate(briefs);
     if (!request) {
       setGenerating(false);
       return;
@@ -500,10 +501,10 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
     return () => {
       live = false;
     };
-  }, [auto, briefs, online, reloadQuietly]);
+  }, [auto, briefs, reloadQuietly]);
 
   const [confirmAll, setConfirmAll] = useState(false);
-  /** Hidden at once. The server archives them now, or when it's back if this device is offline. */
+  /** Hidden at once, then archived in the phone's store. */
   const archive = async (ids: number[]) => {
     setConfirmAll(false);
     setBriefs((list) => (list ?? []).filter((b) => !ids.includes(b.id)));
@@ -520,12 +521,12 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
     setBusy(refresh ? 'refresh' : kind);
     setError(null);
     try {
-      const brief = online ? await api.generateBrief(kind, refresh) : await api.writeOfflineBrief(kind);
+      const brief = await api.generateBrief(kind, refresh);
       setBriefs((list) => [brief, ...(list ?? [])]);
       setOpenId(brief.id);
     } catch (e) {
       setError(message(e));
-      if (online) reloadQuietly();
+      reloadQuietly();
     } finally {
       setBusy(null);
     }
@@ -541,17 +542,17 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
   const suggested = kindForHour(new Date().getHours());
   // Evening briefs never pull, so a refetch late in the day writes an afternoon brief instead.
   const refetchKind: Kind = suggested === 'evening' ? 'afternoon' : suggested;
-  const stale = current === latest && freshness(briefs, online, new Date()).startsWith('stale');
+  const stale = current === latest && freshness(briefs, new Date()) === 'stale';
 
   return (
     <Screen maxWidth={PAGE_WIDTH}>
-      {stale && latest ? <StaleNote brief={latest} generating={generating} online={online} /> : null}
+      {stale && latest ? <StaleNote brief={latest} generating={generating} /> : null}
       {current ? <FrontPage brief={current} wide={wide} ledger={ledger} /> : <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 18 }}>No briefs yet. Write your first one below.</Text>}
 
       {!hasSchedules ? (
         <View style={{ gap: 10 }}>
           <Rule />
-          <Text style={{ color: c.text, fontFamily: F.text, fontSize: 16, lineHeight: 24 }}>Want this without asking? Choose a schedule and your server writes it for you.</Text>
+          <Text style={{ color: c.text, fontFamily: F.text, fontSize: 16, lineHeight: 24 }}>Want this without asking? Choose a schedule and this phone reminds you, then writes it when you open the reminder.</Text>
           <Button label="Choose a schedule" variant="secondary" onPress={onSchedule} />
         </View>
       ) : null}
@@ -569,9 +570,9 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
           ))}
         </View>
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{`${KIND_LABEL[suggested]} fits the time of day, so it's highlighted.`}</Text>
-        <Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || generating || !online} onPress={() => void generate(refetchKind, true)} />
+        <Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || generating} onPress={() => void generate(refetchKind, true)} />
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>
-          {online ? 'OS reads each tool once a day and reuses that data, which keeps API use low. Evening briefs never pull. Refetch is for when something just changed.' : 'Offline, a brief is written on this device from your goals, your updates and the last scan, then synced to your Mac when it’s back. Refetch needs your Mac.'}
+          OS reads each tool once a day and reuses that data, which keeps API use low. Evening briefs never pull. Refetch is for when something just changed.
         </Text>
       </View>
 
@@ -588,7 +589,7 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: OfflineApi
           {confirmAll ? (
             <View accessibilityLiveRegion="polite" style={{ gap: 8, paddingBottom: 8 }}>
               <Text style={{ color: c.text, fontFamily: F.sans, fontSize: 15, lineHeight: 21 }}>
-                Delete {earlier.length === 1 ? 'this earlier brief' : `all ${earlier.length} earlier briefs`}? The brief you're reading stays. They're archived on your server, not erased.
+                Delete {earlier.length === 1 ? 'this earlier brief' : `all ${earlier.length} earlier briefs`}? The brief you're reading stays.
               </Text>
               <View style={{ flexDirection: 'row', gap: 10 }}>
                 <View style={{ flex: 1 }}><Button label="Delete all" variant="danger" onPress={() => void archive(earlier.map((b) => b.id))} /></View>

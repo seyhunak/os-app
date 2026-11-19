@@ -1,5 +1,4 @@
-import type { Connection } from './storage';
-import type { BriefPrompt } from './offlineBrief';
+import type { Os } from './core/os';
 
 export type Kind = 'morning' | 'afternoon' | 'evening';
 
@@ -8,26 +7,19 @@ export type Provider = 'openrouter';
 export interface ModelOption {
   id: string;
   note: string | null;
-  /** Cheap, and known to write a good brief. Missing from servers older than this app. */
+  /** Cheap, and known to write a good brief. */
   recommended?: boolean;
   /** Dollars per million tokens, in plus out. */
   price?: number;
 }
 
 export interface Status {
-  /** Missing from a status saved before servers reported it. */
-  machine?: string;
-  composio: 'environment' | 'saved' | null;
-  openrouter: 'environment' | 'saved' | null;
+  composio: 'saved' | null;
+  openrouter: 'saved' | null;
   composioHint: string | null;
   openrouterHint: string | null;
-  /** The rest are missing from a status saved before servers reported them. */
   provider?: Provider;
   openrouterModel?: string;
-  /** Recommended models to fall back to when yours is rate limited. */
-  fallbackModels?: string[];
-  /** Free models to try first, best first. */
-  freeModels?: string[];
   model: string;
   timezone: string | null;
   selectedToolkits: string[];
@@ -60,10 +52,8 @@ export interface Source {
 export interface Brief {
   id: number;
   kind: Kind;
-  /** 'offline': written on a phone while the server was out of reach. */
+  /** 'offline': written on the phone while the old Mac server was out of reach. */
   trigger: 'manual' | 'schedule' | 'offline';
-  /** An offline draft that hasn't reached the server yet. */
-  pending?: boolean;
   generator: 'ai' | 'digest';
   markdown: string;
   sources: Source[];
@@ -86,126 +76,12 @@ export interface LedgerEntry {
   id: number;
   text: string;
   createdAt: string;
-  /** Written while offline, and not on your server yet. */
-  pending?: boolean;
-}
-
-export interface BriefDraft {
-  clientId: string;
-  kind: Kind;
-  generator: Brief['generator'];
-  markdown: string;
-  sources: Source[];
-  createdAt: string;
 }
 
 export type ScheduleInput = Pick<Schedule, 'kind' | 'time' | 'days' | 'timezone' | 'enabled'>;
 
-export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
-    super(message);
-  }
-}
-
-const LOCAL_HOST = /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[::1\]|.*\.local$)/;
-
-/** Returns a cleaned URL, or throws if the token would cross the internet unencrypted. */
-export function normalizeServerUrl(input: string): string {
-  const value = input.trim().replace(/\/+$/, '');
-  let url: URL;
-  try {
-    url = new URL(/^https?:\/\//i.test(value) ? value : `http://${value}`);
-  } catch {
-    throw new Error("That doesn't look like a server address.");
-  }
-  if (url.protocol === 'http:' && !LOCAL_HOST.test(url.hostname)) {
-    throw new Error('Use https for a server outside your own network, so your token stays private.');
-  }
-  return url.origin;
-}
-
-const READ_TIMEOUT_MS = 10_000;
-/** How long the app waits for your Mac before showing saved content instead. */
-export const PROBE_TIMEOUT_MS = 3_000;
-/** Queued changes are safe to resend, so their sends give up rather than hang on a dead tunnel. */
-export const SEND_TIMEOUT_MS = 8_000;
-/**
- * Writing a brief can take minutes when free models are slow, but a request whose connection died
- * (the server restarted, or iOS suspended the app) would otherwise never finish and keep the brief
- * buttons disabled until the app is closed. So it gives up after this long.
- */
-export const BRIEF_TIMEOUT_MS = 6 * 60_000;
-export const BRIEF_TIMEOUT_MESSAGE = "Your Mac didn't answer in time. If it's still writing the brief, it will show here once it's saved.";
-
-export interface ApiOptions {
-  /** Overrides BRIEF_TIMEOUT_MS. For tests. */
-  briefTimeoutMs?: number;
-}
-
-export function createApi({ url, token }: Connection, { briefTimeoutMs = BRIEF_TIMEOUT_MS }: ApiOptions = {}) {
-  async function request<T>(path: string, method = 'GET', body?: unknown, timeoutMs = method === 'GET' ? READ_TIMEOUT_MS : 0, timeoutMessage?: string): Promise<T> {
-    let response: Response;
-    const unreachable = () => new ApiError(`Can't reach your OS server at ${url}. Check that it's running.`, 0);
-    // Reads give up quickly so an outage shows saved content. Writing a brief gets minutes instead.
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs) : null;
-    try {
-      response = await fetch(`${url}/api${path}`, {
-        method,
-        signal: controller.signal,
-        headers: { Authorization: `Bearer ${token}`, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-      });
-    } catch {
-      throw timedOut && timeoutMessage ? new ApiError(timeoutMessage, 0) : unreachable();
-    } finally {
-      if (timer) clearTimeout(timer);
-    }
-    // Tailscale answers with these when the Mac is reachable but OS isn't running.
-    if (response.status === 502 || response.status === 503 || response.status === 504) throw unreachable();
-    const data = await response.json().catch(() => null);
-    if (response.ok && data === null) throw unreachable();
-    if (!response.ok) throw new ApiError(data?.error ?? `The server returned an error (${response.status}).`, response.status);
-    return data as T;
-  }
-
-  return {
-    status: () => request<Status>('/status'),
-    /** A quick reachability check: gives up after `timeoutMs`, so a dead tunnel can't hold up the app. */
-    ping: (timeoutMs = PROBE_TIMEOUT_MS) => request<Status>('/status', 'GET', undefined, timeoutMs),
-    saveComposioKey: (apiKey: string) => request('/credentials/composio', 'PUT', { apiKey }),
-    saveOpenRouterKey: (apiKey: string) => request('/credentials/openrouter', 'PUT', { apiKey }),
-    /** The saved OpenRouter key itself, so the phone can keep the same key for writing offline. */
-    openRouterKey: () => request<{ apiKey: string }>('/credentials/openrouter'),
-    removeCredential: (name: 'composio' | 'openrouter') => request(`/credentials/${name}`, 'DELETE'),
-    saveAi: (model: string) => request('/ai', 'PUT', { provider: 'openrouter', model }),
-    aiModels: () => request<{ models: ModelOption[]; error: string | null }>('/ai/models?provider=openrouter'),
-    toolkits: (fresh = false) => request<{ toolkits: Toolkit[]; error: string | null; needsAuth: boolean }>(`/toolkits${fresh ? '?fresh=1' : ''}`),
-    selectToolkits: (slugs: string[]) => request('/toolkits/selection', 'PUT', { slugs }),
-    connectToolkit: (slug: string) => request<{ redirectUrl: string | null }>(`/toolkits/${slug}/connect`, 'POST'),
-    goals: () => request<{ goals: string }>('/goals'),
-    saveGoals: (goals: string) => request('/goals', 'PUT', { goals }, SEND_TIMEOUT_MS),
-    saveTimezone: (timezone: string) => request('/settings/timezone', 'PUT', { timezone }),
-    ledger: () => request<{ entries: LedgerEntry[] }>('/ledger'),
-    addUpdate: (text: string, meta?: { clientId: string; createdAt: string }) => request<LedgerEntry>('/ledger', 'POST', { text, ...meta }, meta ? SEND_TIMEOUT_MS : 0),
-    /** Hides briefs from every list. They stay in the server's database. */
-    briefPrompt: () => request<BriefPrompt>('/brief-prompt'),
-    /** Saves a brief written offline. The client id makes a resend return the one already saved. */
-    importBrief: (draft: BriefDraft) => request<Brief>('/briefs/import', 'POST', draft, SEND_TIMEOUT_MS),
-    archiveBriefs: (ids: number[]) => request<{ archived: number }>('/briefs/archive', 'POST', { ids }, SEND_TIMEOUT_MS),
-    briefs: () => request<{ briefs: Brief[] }>('/briefs'),
-    generateBrief: (kind: Kind, refresh = false) => request<Brief>('/briefs', 'POST', { kind, refresh }, briefTimeoutMs, BRIEF_TIMEOUT_MESSAGE),
-    /** Writes today's first brief, unless one from today already exists, in which case the server returns that. */
-    generateTodayBrief: (kind: Kind) => request<Brief>('/briefs', 'POST', { kind, ifStale: true }, briefTimeoutMs, BRIEF_TIMEOUT_MESSAGE),
-    schedules: () => request<{ schedules: Schedule[] }>('/schedules'),
-    createSchedule: (input: ScheduleInput) => request<Schedule>('/schedules', 'POST', input),
-    updateSchedule: (id: number, input: ScheduleInput) => request<Schedule>(`/schedules/${id}`, 'PUT', input),
-    deleteSchedule: (id: number) => request(`/schedules/${id}`, 'DELETE'),
-  };
-}
-
-export type Api = ReturnType<typeof createApi>;
+/** Everything the app does, run on this phone. */
+export type Api = Os;
 
 export function deviceTimezone(): string {
   try {

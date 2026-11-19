@@ -1,4 +1,13 @@
-import type { Kind, SourceReport } from './db.ts';
+import type { Kind, SourceReport } from './db';
+
+/** AbortSignal.timeout isn't in every React Native runtime, so this does the same with a timer. */
+export function timeoutSignal(ms: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  // In Node (tests) a pending timer would keep the process alive. React Native has no unref.
+  (timer as { unref?(): void }).unref?.();
+  return controller.signal;
+}
 
 export const SOURCES_MARKER = '{{SOURCES}}';
 export const DEFAULT_MODEL = 'qwen/qwen3.7-flash';
@@ -109,8 +118,7 @@ const STRUCTURE: Record<Kind, string> = {
 };
 
 /**
- * The rules and layout, for a phone that writes a brief itself while the server is out of reach.
- * It caches these, so offline briefs follow the same rules without a second copy to keep in step.
+ * The rules and layout every brief is written with, as one object.
  */
 export const briefPrompt = () => ({ system: { morning: `${SHARED_RULES}\n\n${STRUCTURE.morning}`, afternoon: `${SHARED_RULES}\n\n${STRUCTURE.afternoon}`, evening: `${SHARED_RULES}\n\n${STRUCTURE.evening}` }, maxTokens: MAX_OUTPUT_TOKENS, sourcesMarker: SOURCES_MARKER });
 
@@ -215,7 +223,7 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
       const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-        signal: AbortSignal.timeout(isFree(id) ? FREE_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
+        signal: timeoutSignal(isFree(id) ? FREE_TIMEOUT_MS : REQUEST_TIMEOUT_MS),
         body: JSON.stringify({
           model: id,
           max_tokens: reasoning.enabled === false || !isFree(id) ? MAX_OUTPUT_TOKENS : FREE_THINKING_TOKENS,
@@ -345,7 +353,7 @@ export const canRecommend = (id: string, price: number) =>
  * list stays cheap but capable as new models appear, with no list of names to keep up to date.
  */
 export async function listOpenRouterModels(apiKey: string): Promise<ModelOption[]> {
-  const response = await fetch(`${OPENROUTER_URL}/models/user`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(15_000) });
+  const response = await fetch(`${OPENROUTER_URL}/models/user`, { headers: { Authorization: `Bearer ${apiKey}` }, signal: timeoutSignal(15_000) });
   if (!response.ok) throw new OpenRouterError(response.status, `HTTP ${response.status}`);
   const { data } = (await response.json()) as { data?: OpenRouterModel[] };
   const cost = (m: OpenRouterModel) => (Number(m.pricing?.prompt ?? 0) + Number(m.pricing?.completion ?? 0)) * 1_000_000;
@@ -372,7 +380,7 @@ export async function listOpenRouterModels(apiKey: string): Promise<ModelOption[
 export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
   const response = await fetch(`${OPENROUTER_URL}/key`, {
     headers: { Authorization: `Bearer ${apiKey}` },
-    signal: AbortSignal.timeout(15_000),
+    signal: timeoutSignal(15_000),
   });
   if (!response.ok) throw new OpenRouterError(response.status, `HTTP ${response.status}`);
 }

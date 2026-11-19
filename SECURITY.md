@@ -4,9 +4,9 @@ Please report vulnerabilities through [GitHub's private reporting](https://githu
 
 ## How your data is protected
 
-- **Server token.** Every API call needs it. It's random, stored with owner-only file permissions, and sent only in the `Authorization` header. The web app opened at `127.0.0.1` or `localhost` on the server's own Mac reads it from `/local-token`, which answers only a same-origin browser request from loopback with a loopback Host and no proxy headers, so other websites, rebound domains, Tailscale and other devices get a 404. Another account on the same Mac could still ask for it, so on a shared Mac set `OS_LOCAL_TOKEN=off` to turn this off.
-- **API keys.** Stored encrypted with AES-256-GCM. The encryption key is a separate owner-only file in the data directory, so a copy of the database alone doesn't reveal them. Someone who can read your whole data directory can read your keys. The API returns only the last 4 characters of a key, with one exception: the OpenRouter key, which a signed-in phone reads so it can write briefs offline with the same key.
-- **On devices.** iOS and Android keep the server token, and a copy of your OpenRouter key, in the system keychain. Removing the key in Settings removes it from each phone at its next sync. The web app uses `localStorage`, so only use it in a browser you trust.
-- **Offline copies.** Each device keeps recent briefs and updates so they stay readable offline. These can include email subjects, and they rely on the device's own protection. Disconnecting a device removes them.
-- **On the network.** The server listens on `127.0.0.1` by default. Put HTTPS in front of it before reaching it from another device.
+- **Everything stays on your phone.** There's no OS server. Your briefs, updates, goals, schedules and the 7-day cache of what was read are in the app's own SQLite database, protected by the phone's storage encryption and app sandbox.
+- **API keys.** Your Composio and OpenRouter keys are kept in the iOS Keychain or Android Keystore, readable only by this app on this device. The app shows only their last 4 characters.
+- **On the network.** The app talks only to Composio (`backend.composio.dev`), to read your tools, and to OpenRouter (`openrouter.ai`), to write the brief, both over HTTPS. It sends no telemetry.
+- **What leaves the phone.** Tool requests go to Composio under your own account. With an OpenRouter key, summaries of what was read, your goals and your recent updates go to OpenRouter, which only uses providers that don't train on or store prompts. Meeting links, passcodes and common token formats are removed first.
+- **Erasing.** Settings → Your data → "Erase everything on this phone" removes your keys and all saved data, and cancels reminders. Deleting the app does the same.
 - **Untrusted content.** Email and other tool data is kept apart from the model's instructions, and the model has no tools. Brief text renders without live links.

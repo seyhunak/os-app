@@ -10,9 +10,6 @@
       "supportsTablet": true,
       "bundleIdentifier": "dev.osapp.os",
       "infoPlist": {
-        "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
-        },
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -26,15 +23,15 @@
       "predictiveBackGestureEnabled": false,
       "package": "dev.osapp.os"
     },
-    "web": {
-      "favicon": "./assets/favicon.png",
-      "bundler": "metro",
-      "output": "single"
-    },
     "plugins": [
       "expo-secure-store",
       "expo-web-browser",
-      "expo-font"
+      "expo-font",
+      "expo-sqlite",
+      [
+        "expo-notifications",
+        {}
+      ]
     ],
     "scheme": "os"
   }

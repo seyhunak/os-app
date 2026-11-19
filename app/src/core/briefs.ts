@@ -1,8 +1,8 @@
-import { toolkitBySlug } from './collectors.ts';
-import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio.ts';
-import { describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer } from './compose.ts';
-import type { Brief, Kind, SourceReport, Store } from './db.ts';
-import { redact, redactDeep } from './redact.ts';
+import { toolkitBySlug } from './collectors';
+import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
+import { describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer } from './compose';
+import type { Brief, Kind, SourceReport, Store } from './db';
+import { redact, redactDeep } from './redact';
 
 export interface BriefDeps {
   store: Store;

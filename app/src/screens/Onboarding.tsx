@@ -1,74 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Linking, Platform } from 'react-native';
-import { COMPOSIO_URL, createApi, deviceTimezone, normalizeServerUrl, type Api, type Brief, type Status, type Toolkit } from '../api';
-import { takeLinkToken } from '../linkToken';
-import { saveConnection, savePhoneAiKey, type Connection } from '../storage';
+import { useMemo, useState } from 'react';
+import { Linking } from 'react-native';
+import { COMPOSIO_URL, deviceTimezone, type Api, type Brief, type Status, type Toolkit } from '../api';
 import { ToolList } from '../ToolList';
 import { Body, Button, ErrorNote, Field, message, Screen, Title } from '../ui';
-
-function defaultServerUrl() {
-  if (Platform.OS === 'web' && typeof location !== 'undefined' && location.port !== '8081') return location.origin;
-  return process.env.EXPO_PUBLIC_OS_URL || 'http://localhost:8787';
-}
-
-export function PairScreen({ onPaired }: { onPaired(connection: Connection): void }) {
-  const [url, setUrl] = useState(defaultServerUrl);
-  // Web takes the token only from a one-time #token= link, never from the bundle, which is served without a login.
-  // Private mobile builds can prefill it at build time.
-  const [linkToken] = useState(() => (Platform.OS === 'web' ? takeLinkToken() : null));
-  const [token, setToken] = useState(linkToken ?? (Platform.OS === 'web' ? '' : (process.env.EXPO_PUBLIC_OS_TOKEN ?? '')));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const [localFill, setLocalFill] = useState(false);
-
-  useEffect(() => {
-    if (linkToken) {
-      void submit(linkToken);
-      return;
-    }
-    // Opened on the Mac that runs the server: the server hands this page its token, so it connects by itself.
-    if (Platform.OS !== 'web' || typeof location === 'undefined' || !/^(127\.0\.0\.1|localhost|\[::1\])$/.test(location.hostname)) return;
-    fetch(`${location.origin}/local-token`, { cache: 'no-store' })
-      .then((r) => (r.ok ? (r.json() as Promise<{ token?: string }>) : null))
-      .then((body) => {
-        if (!body?.token) return;
-        setToken(body.token);
-        setLocalFill(true);
-        void submit(body.token);
-      })
-      .catch(() => undefined);
-    // Runs once: a link or this Mac connects on arrival, typing never does.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const submit = async (value = token) => {
-    setBusy(true);
-    setError(null);
-    try {
-      const connection = { url: normalizeServerUrl(url), token: value.trim() };
-      await createApi(connection).status();
-      await saveConnection(connection);
-      onPaired(connection);
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Screen>
-      <Title>OS</Title>
-      <Body>A short daily brief from your own tools: what matters, what to drop, and what to do next.</Body>
-      <Body muted>Connect to your OS server. It keeps your keys and briefs on your own machine.</Body>
-      <Field label="Server address" value={url} onChangeText={setUrl} keyboardType="url" autoComplete="off" />
-      <Field label="Server token" value={token} onChangeText={setToken} secureTextEntry hint={localFill ? 'Filled in from this Mac’s server.' : 'Printed when the server first starts, and saved in ~/.os-app/token. On the Mac that runs the server, open 127.0.0.1:8787 and it fills in by itself.'} onSubmitEditing={() => void submit()} />
-      <ErrorNote message={error} />
-      <Button label="Connect" busy={busy} disabled={!token.trim()} onPress={() => void submit()} />
-    </Screen>
-  );
-}
 
 export function ComposioScreen({ api, onDone }: { api: Api; onDone(): void }) {
   const [apiKey, setApiKey] = useState('');
@@ -90,10 +24,11 @@ export function ComposioScreen({ api, onDone }: { api: Api; onDone(): void }) {
   return (
     <Screen>
       <Title step="Step 1 of 3">Authorize Composio</Title>
+      <Body muted>OS runs on this phone. Your keys, goals and briefs stay here, and it talks only to Composio and OpenRouter.</Body>
       <Body>Composio handles sign-in to Gmail, Calendar and your other tools, so OS never sees those passwords. OS only reads from them.</Body>
       <Button label="Open Composio" variant="secondary" onPress={() => void Linking.openURL(COMPOSIO_URL)} />
       <Body muted>Sign in, go to Settings, then Project Settings, then API Keys. Copy your key and paste it here.</Body>
-      <Field label="Composio API key" value={apiKey} onChangeText={setApiKey} secureTextEntry hint="Checked with Composio, then stored encrypted on your server. You only do this once." onSubmitEditing={() => void submit()} />
+      <Field label="Composio API key" value={apiKey} onChangeText={setApiKey} secureTextEntry hint="Checked with Composio, then kept in this phone’s Keychain. You only do this once." onSubmitEditing={() => void submit()} />
       <ErrorNote message={error} />
       <Button label="Continue" busy={busy} disabled={apiKey.trim().length < 8} onPress={() => void submit()} />
     </Screen>
@@ -128,11 +63,7 @@ export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: St
     setError(null);
     try {
       if (goals.trim()) await api.saveGoals(goals);
-      if (openRouterKey.trim()) {
-        await api.saveOpenRouterKey(openRouterKey.trim());
-        // The same key writes briefs on this phone when the server is out of reach.
-        if (Platform.OS !== 'web') await savePhoneAiKey(openRouterKey.trim()).catch(() => undefined);
-      }
+      if (openRouterKey.trim()) await api.saveOpenRouterKey(openRouterKey.trim());
       await api.saveTimezone(deviceTimezone());
       onDone(await api.generateBrief('morning'));
     } catch (e) {
