@@ -95,6 +95,15 @@ const summarizeCode = (review: string) => (items: Dict[]) => {
 
 const summarizeEdits = (noun: string) => (items: Dict[]) => `${plural(items.length, noun)} changed in the last ${RECENT_DAYS} days. Latest: ${clip(items[0]!.title, 90) || 'Untitled'}.`;
 
+const summarizeDeals = (items: Dict[]) => {
+  const dated = items.filter((d) => d.closes).sort((a, b) => String(a.closes).localeCompare(String(b.closes)));
+  const next = dated[0];
+  return `${plural(items.length, 'open deal')}.${next ? ` Next to close: ${clip(next.deal, 80)} on ${next.closes}.` : ''}`;
+};
+
+/** Chat messages arrive as HTML; the brief only needs the words. */
+const plainText = (html: unknown) => clip(typeof html === 'string' ? html.replace(/<[^>]*>/g, ' ').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&') : '');
+
 const AI_TERMS = /\b(ai|llm|gpt|claude|anthropic|openai|gemini|mistral|agents?|machine learning|inference|model)\b/i;
 
 export const TOOLKITS: Toolkit[] = [
@@ -421,11 +430,139 @@ export const TOOLKITS: Toolkit[] = [
         .filter((d) => !/^closed/i.test(String(d.dealstage)))
         .map((d) => ({ deal: clip(d.dealname, 160), stage: clip(d.dealstage, 60), closes: typeof d.closedate === 'string' ? d.closedate.slice(0, 10) : null, amount: d.amount ?? null }));
     },
-    summarize(items) {
-      const dated = items.filter((d) => d.closes).sort((a, b) => String(a.closes).localeCompare(String(b.closes)));
-      const next = dated[0];
-      return `${plural(items.length, 'open deal')}.${next ? ` Next to close: ${clip(next.deal, 80)} on ${next.closes}.` : ''}`;
+    summarize: summarizeDeals,
+  },
+  {
+    slug: 'salesforce',
+    name: 'Salesforce',
+    description: 'Open opportunities you own, and when they should close',
+    async collect(gateway, account) {
+      // Relative, because each Salesforce org has its own address, which Composio fills in.
+      const me = asDict(await gateway.proxy({ accountId: account!.id, endpoint: '/services/oauth2/userinfo', method: 'GET' }));
+      const owner = String(me.user_id ?? '').replace(/[^A-Za-z0-9]/g, '');
+      if (!owner) return [];
+      const data = asDict(await gateway.proxy({
+        accountId: account!.id,
+        endpoint: '/services/data/v60.0/query',
+        method: 'GET',
+        query: { q: `SELECT Name, StageName, CloseDate, Amount FROM Opportunity WHERE IsClosed = false AND OwnerId = '${owner}' ORDER BY CloseDate ASC LIMIT 50` },
+      }));
+      return asList(data.records).map(asDict).map((o) => ({ deal: clip(o.Name, 160), stage: clip(o.StageName, 60), closes: typeof o.CloseDate === 'string' ? o.CloseDate.slice(0, 10) : null, amount: o.Amount ?? null }));
     },
+    summarize: summarizeDeals,
+  },
+  {
+    slug: 'clickup',
+    name: 'ClickUp',
+    description: 'Open tasks assigned to you, and their due dates',
+    async collect(gateway, account) {
+      const base = 'https://api.clickup.com/api/v2';
+      const get = async (endpoint: string, query?: Record<string, string | number>) =>
+        asDict(await gateway.proxy({ accountId: account!.id, endpoint: `${base}${endpoint}`, method: 'GET', ...(query ? { query } : {}) }));
+      const me = asDict((await get('/user')).user).id;
+      const teams = asList((await get('/team')).teams).map(asDict).slice(0, 5);
+      const facts: unknown[] = [];
+      for (const team of teams) {
+        const data = await get(`/team/${encodeURIComponent(String(team.id))}/task`, { 'assignees[]': String(me), include_closed: 'false', subtasks: 'true', order_by: 'due_date' });
+        for (const raw of asList(data.tasks)) {
+          const t = asDict(raw);
+          if (!clip(t.name)) continue;
+          const due = Number(t.due_date);
+          facts.push({ task: clip(t.name, 160), due: due ? new Date(due).toISOString().slice(0, 10) : null, list: clip(asDict(t.list).name, 60), status: clip(asDict(t.status).status, 40) });
+        }
+      }
+      return facts;
+    },
+    summarize: summarizeTasks,
+  },
+  {
+    slug: 'microsoft_todo',
+    name: 'Microsoft To Do',
+    description: 'Open tasks and due dates across your lists',
+    async collect(gateway, account) {
+      const base = 'https://graph.microsoft.com/v1.0/me/todo/lists';
+      const lists = asList(asDict(await gateway.proxy({ accountId: account!.id, endpoint: base, method: 'GET', query: { $top: 10 } })).value).map(asDict);
+      const facts: unknown[] = [];
+      for (const list of lists) {
+        const data = asDict(await gateway.proxy({
+          accountId: account!.id,
+          endpoint: `${base}/${encodeURIComponent(String(list.id))}/tasks`,
+          method: 'GET',
+          query: { $filter: "status ne 'completed'", $top: 50 },
+        }));
+        for (const raw of asList(data.value)) {
+          const t = asDict(raw);
+          if (t.status === 'completed' || !clip(t.title)) continue;
+          const due = asDict(t.dueDateTime).dateTime;
+          facts.push({ task: clip(t.title, 160), due: typeof due === 'string' ? due.slice(0, 10) : null, list: clip(list.displayName, 60), important: t.importance === 'high' });
+        }
+      }
+      return facts;
+    },
+    summarize: summarizeTasks,
+  },
+  {
+    slug: 'microsoft_teams',
+    name: 'Microsoft Teams',
+    description: 'The latest message in your recent chats',
+    async collect(gateway, account, now) {
+      const data = asDict(await gateway.proxy({
+        accountId: account!.id,
+        endpoint: 'https://graph.microsoft.com/v1.0/me/chats',
+        method: 'GET',
+        query: { $expand: 'lastMessagePreview', $orderby: 'lastMessagePreview/createdDateTime desc', $top: 20 },
+      }));
+      const since = Date.parse(daysAgo(now, RECENT_DAYS));
+      return asList(data.value).map(asDict).flatMap((chat) => {
+        const last = asDict(chat.lastMessagePreview);
+        const text = plainText(asDict(last.body).content);
+        if (!text || !(Date.parse(String(last.createdDateTime)) >= since)) return [];
+        return [{ chat: clip(chat.topic, 80) || (chat.chatType === 'oneOnOne' ? 'Direct message' : 'Group chat'), from: clip(asDict(asDict(last.from).user).displayName, 60), text, ts: last.createdDateTime }];
+      });
+    },
+    summarize(items) {
+      const latest = items[0]!;
+      return `${plural(items.length, 'chat')} active in the last ${RECENT_DAYS} days. Latest: ${latest.from ? `${clip(latest.from, 40)} in ` : ''}${clip(latest.chat, 60)}.`;
+    },
+  },
+  {
+    slug: 'zoom',
+    name: 'Zoom',
+    description: 'Meetings scheduled this week',
+    async collect(gateway, account, now, timeZone) {
+      const data = asDict(await gateway.proxy({ accountId: account!.id, endpoint: 'https://api.zoom.us/v2/users/me/meetings', method: 'GET', query: { type: 'upcoming', page_size: 30 } }));
+      const end = endOfWeek(now, timeZone).getTime();
+      return asList(data.meetings).map(asDict)
+        .filter((m) => Date.parse(String(m.start_time)) < end)
+        .sort((a, b) => String(a.start_time).localeCompare(String(b.start_time)))
+        .map((m) => ({ title: clip(m.topic, 160), start: m.start_time, minutes: m.duration ?? null }));
+    },
+    keep: keepThisWeek,
+    summarize: summarizeMeetings,
+  },
+  {
+    slug: 'sentry',
+    name: 'Sentry',
+    description: 'Unresolved errors assigned to you from the last 14 days',
+    async collect(gateway, account) {
+      const base = 'https://sentry.io/api/0/organizations';
+      const orgs = asList(await gateway.proxy({ accountId: account!.id, endpoint: `${base}/`, method: 'GET' })).map(asDict).slice(0, 3);
+      const facts: unknown[] = [];
+      for (const org of orgs) {
+        const issues = await gateway.proxy({
+          accountId: account!.id,
+          endpoint: `${base}/${encodeURIComponent(String(org.slug))}/issues/`,
+          method: 'GET',
+          query: { query: 'is:unresolved assigned:me', statsPeriod: '14d', limit: 25 },
+        });
+        for (const raw of asList(issues)) {
+          const i = asDict(raw);
+          facts.push({ id: clip(i.shortId, 40), title: clip(i.title, 160), state: clip(i.level, 20), team: clip(asDict(i.project).slug, 60), events: i.count ?? null, updated: i.lastSeen });
+        }
+      }
+      return facts;
+    },
+    summarize: summarizeIssues,
   },
   {
     slug: 'hackernews',
