@@ -2,6 +2,7 @@ import * as WebBrowser from 'expo-web-browser';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Linking, Pressable, Text, View } from 'react-native';
 import { COMPOSIO_URL, type Api, type Toolkit } from './api';
+import { groupByCategory } from './toolGroups';
 import { Button, Card, ErrorNote, Loading, message, useColors, F } from './ui';
 
 const POLL_MS = 4000;
@@ -108,45 +109,54 @@ export function ToolList({ api, onChange }: { api: Api; onChange?(toolkits: Tool
     <View style={{ gap: 10 }}>
       <ErrorNote message={error} />
       {needsAuth ? <Button label="Open Composio" onPress={() => void open(COMPOSIO_URL)} /> : null}
-      {toolkits.map((t) => {
-        const connected = t.noAuth || t.accounts > 0;
-        return (
-          <Card key={t.slug}>
-            <Pressable
-              accessibilityRole="checkbox"
-              accessibilityLabel={`Use ${t.name} in briefs`}
-              accessibilityState={{ checked: t.selected }}
-              onPress={() => void toggle(t.slug)}
-              style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44 }}
-            >
-              <View style={{ width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: t.selected ? c.accent : c.muted, backgroundColor: t.selected ? c.accent : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
-                {t.selected ? <Text style={{ color: c.onAccent, fontSize: 15, fontFamily: F.sansBold, lineHeight: 18 }}>✓</Text> : null}
-              </View>
-              <View style={{ flex: 1, gap: 2 }}>
-                <Text style={{ color: c.text, fontSize: 16, fontFamily: F.sansMedium }}>{t.name}</Text>
-                <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 19 }}>{t.description}</Text>
-              </View>
-            </Pressable>
-            {t.selected ? (
-              connected ? (
-                <Text style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>
-                  {t.noAuth ? 'Ready' : `Connected${t.accounts > 1 ? ` (${t.accounts} accounts)` : ''}`}
-                </Text>
-              ) : (
-                <View style={{ gap: 8 }}>
-                  <Button label={`Connect ${t.name}`} variant="secondary" busy={connecting === t.slug} disabled={connecting !== null} onPress={() => void connect(t)} />
-                  {fallbackUrl?.slug === t.slug ? (
-                    <>
-                      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 19 }}>Finish signing in, then come back. This updates on its own. If no page opened, use the button below.</Text>
-                      <Button label="Open the sign-in page" variant="secondary" onPress={() => void open(fallbackUrl.url)} />
-                    </>
-                  ) : null}
-                </View>
-              )
-            ) : null}
-          </Card>
-        );
-      })}
+      {groupByCategory(toolkits).map((group) => (
+        <View key={group.category} style={{ gap: 10, paddingTop: 6 }}>
+          <Text accessibilityRole="header" style={{ color: c.muted, fontFamily: F.sansMedium, fontSize: 14, lineHeight: 19 }}>
+            {/* Lowercase, like every Lumen label, but an acronym such as CRM keeps its capitals. */}
+            {`${/^[A-Z]+$/.test(group.category) ? group.category : group.category.toLowerCase()}  `}
+            <Text style={{ fontFamily: F.mono, fontSize: 13 }}>{group.tools.filter((t) => t.selected).length}/{group.tools.length}</Text>
+          </Text>
+          {group.tools.map((t) => {
+            const connected = t.noAuth || t.accounts > 0;
+            return (
+              <Card key={t.slug}>
+                <Pressable
+                  accessibilityRole="checkbox"
+                  accessibilityLabel={`Use ${t.name} in briefs`}
+                  accessibilityState={{ checked: t.selected }}
+                  onPress={() => void toggle(t.slug)}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 44 }}
+                >
+                  <View style={{ width: 24, height: 24, borderRadius: 7, borderWidth: 2, borderColor: t.selected ? c.accent : c.muted, backgroundColor: t.selected ? c.accent : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
+                    {t.selected ? <Text style={{ color: c.onAccent, fontSize: 15, fontFamily: F.sansBold, lineHeight: 18 }}>✓</Text> : null}
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={{ color: c.text, fontSize: 16, fontFamily: F.sansMedium }}>{t.name}</Text>
+                    <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 19 }}>{t.description}</Text>
+                  </View>
+                </Pressable>
+                {t.selected ? (
+                  connected ? (
+                    <Text style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>
+                      {t.noAuth ? 'Ready' : `Connected${t.accounts > 1 ? ` (${t.accounts} accounts)` : ''}`}
+                    </Text>
+                  ) : (
+                    <View style={{ gap: 8 }}>
+                      <Button label={`Connect ${t.name}`} variant="secondary" busy={connecting === t.slug} disabled={connecting !== null} onPress={() => void connect(t)} />
+                      {fallbackUrl?.slug === t.slug ? (
+                        <>
+                          <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 19 }}>Finish signing in, then come back. This updates on its own. If no page opened, use the button below.</Text>
+                          <Button label="Open the sign-in page" variant="secondary" onPress={() => void open(fallbackUrl.url)} />
+                        </>
+                      ) : null}
+                    </View>
+                  )
+                ) : null}
+              </Card>
+            );
+          })}
+        </View>
+      ))}
       <Button label="Check connections" variant="secondary" busy={checking} onPress={() => void checkConnections()} />
     </View>
   );

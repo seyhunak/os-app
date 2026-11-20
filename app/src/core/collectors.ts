@@ -1,8 +1,12 @@
 import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
 
+/** How Settings groups the tools. Listed A to Z there, as are the tools inside each. */
+export type Category = 'Calendar' | 'Chat' | 'Code' | 'CRM' | 'Email' | 'Files and docs' | 'News' | 'Tasks';
+
 export interface Toolkit {
   slug: string;
   name: string;
+  category: Category;
   description: string;
   noAuth?: boolean;
   /** Read-only. Returns distilled facts, never raw API responses. */
@@ -110,6 +114,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'gmail',
     name: 'Gmail',
+    category: 'Email',
     description: 'Commitments, requests and deadlines from your last 5 emails',
     async collect(gateway, account) {
       const data = await gateway.execute('GMAIL_FETCH_EMAILS', { max_results: LAST_EMAILS, query: 'newer_than:3d', user_id: 'me' }, account?.id);
@@ -131,6 +136,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'googlecalendar',
     name: 'Google Calendar',
+    category: 'Calendar',
     description: 'This week: meeting topics and who attends',
     async collect(gateway, account, now, timeZone) {
       const data = asDict(await gateway.proxy({
@@ -164,6 +170,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'github',
     name: 'GitHub',
+    category: 'Code',
     description: 'Issues and pull requests assigned to you',
     async collect(gateway, account) {
       const data = await gateway.proxy({
@@ -187,6 +194,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'slack',
     name: 'Slack',
+    category: 'Chat',
     description: 'Recent messages from channels you belong to',
     async collect(gateway, account) {
       const list = await gateway.execute('SLACK_LIST_CONVERSATIONS', { limit: 50, exclude_archived: true }, account?.id);
@@ -218,6 +226,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'todoist',
     name: 'Todoist',
+    category: 'Tasks',
     description: 'Open tasks, due dates and priorities',
     async collect(gateway, account) {
       const data = asDict(await gateway.proxy({ accountId: account!.id, endpoint: '/api/v1/tasks', method: 'GET', query: { limit: 200 } }));
@@ -231,6 +240,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'googletasks',
     name: 'Google Tasks',
+    category: 'Tasks',
     description: 'Open tasks and due dates across your task lists',
     async collect(gateway, account) {
       const base = 'https://tasks.googleapis.com/tasks/v1';
@@ -256,6 +266,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'linear',
     name: 'Linear',
+    category: 'Code',
     description: 'Issues and their current state',
     async collect(gateway, account) {
       const query = 'query { issues(first: 50) { nodes { identifier title priority updatedAt state { name type } team { name } } } }';
@@ -277,6 +288,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'outlook',
     name: 'Outlook',
+    category: 'Email',
     description: 'Commitments, requests and deadlines from your last 5 emails',
     async collect(gateway, account, now) {
       const data = asDict(await gateway.proxy({
@@ -297,6 +309,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'calendly',
     name: 'Calendly',
+    category: 'Calendar',
     description: 'Calls booked with you this week, and who booked them',
     async collect(gateway, account, now, timeZone) {
       const get = async (endpoint: string, query?: Record<string, string | number>) =>
@@ -322,6 +335,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'notion',
     name: 'Notion',
+    category: 'Files and docs',
     description: 'Pages changed in the last 7 days',
     async collect(gateway, account, now) {
       const data = asDict(await gateway.proxy({
@@ -342,6 +356,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'googledrive',
     name: 'Google Drive',
+    category: 'Files and docs',
     description: 'Files changed in the last 7 days',
     async collect(gateway, account, now) {
       const data = asDict(await gateway.proxy({
@@ -357,6 +372,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'asana',
     name: 'Asana',
+    category: 'Tasks',
     description: 'Open tasks assigned to you, and their due dates',
     async collect(gateway, account) {
       const base = 'https://app.asana.com/api/1.0';
@@ -381,6 +397,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'trello',
     name: 'Trello',
+    category: 'Tasks',
     description: 'Open cards assigned to you, and their due dates',
     async collect(gateway, account) {
       const data = await gateway.proxy({ accountId: account!.id, endpoint: 'https://api.trello.com/1/members/me/cards', method: 'GET', query: { filter: 'open', fields: 'name,due,dueComplete' } });
@@ -391,6 +408,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'jira',
     name: 'Jira',
+    category: 'Code',
     description: 'Unresolved issues assigned to you',
     async collect(gateway, account) {
       const data = asDict(await gateway.proxy({
@@ -410,6 +428,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'gitlab',
     name: 'GitLab',
+    category: 'Code',
     description: 'Issues and merge requests assigned to you',
     async collect(gateway, account) {
       const read = async (path: string, type: string) => {
@@ -423,6 +442,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'hubspot',
     name: 'HubSpot',
+    category: 'CRM',
     description: 'Open deals and when they should close',
     async collect(gateway, account) {
       const data = asDict(await gateway.proxy({ accountId: account!.id, endpoint: 'https://api.hubapi.com/crm/v3/objects/deals', method: 'GET', query: { limit: 50, properties: 'dealname,dealstage,closedate,amount' } }));
@@ -435,6 +455,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'salesforce',
     name: 'Salesforce',
+    category: 'CRM',
     description: 'Open opportunities you own, and when they should close',
     async collect(gateway, account) {
       // Relative, because each Salesforce org has its own address, which Composio fills in.
@@ -454,6 +475,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'clickup',
     name: 'ClickUp',
+    category: 'Tasks',
     description: 'Open tasks assigned to you, and their due dates',
     async collect(gateway, account) {
       const base = 'https://api.clickup.com/api/v2';
@@ -478,6 +500,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'microsoft_todo',
     name: 'Microsoft To Do',
+    category: 'Tasks',
     description: 'Open tasks and due dates across your lists',
     async collect(gateway, account) {
       const base = 'https://graph.microsoft.com/v1.0/me/todo/lists';
@@ -504,6 +527,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'microsoft_teams',
     name: 'Microsoft Teams',
+    category: 'Chat',
     description: 'The latest message in your recent chats',
     async collect(gateway, account, now) {
       const data = asDict(await gateway.proxy({
@@ -528,6 +552,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'zoom',
     name: 'Zoom',
+    category: 'Calendar',
     description: 'Meetings scheduled this week',
     async collect(gateway, account, now, timeZone) {
       const data = asDict(await gateway.proxy({ accountId: account!.id, endpoint: 'https://api.zoom.us/v2/users/me/meetings', method: 'GET', query: { type: 'upcoming', page_size: 30 } }));
@@ -543,6 +568,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'sentry',
     name: 'Sentry',
+    category: 'Code',
     description: 'Unresolved errors assigned to you from the last 14 days',
     async collect(gateway, account) {
       const base = 'https://sentry.io/api/0/organizations';
@@ -567,6 +593,7 @@ export const TOOLKITS: Toolkit[] = [
   {
     slug: 'hackernews',
     name: 'Hacker News',
+    category: 'News',
     description: 'AI stories from the front page. No account needed',
     noAuth: true,
     async collect(gateway) {

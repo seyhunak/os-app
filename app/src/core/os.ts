@@ -188,6 +188,7 @@ export function createOs(deps: OsDeps) {
         toolkits: TOOLKITS.map((t) => ({
           slug: t.slug,
           name: t.name,
+          category: t.category,
           description: t.description,
           noAuth: Boolean(t.noAuth),
           selected: selected.includes(t.slug),
