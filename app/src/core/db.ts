@@ -1,4 +1,7 @@
-export type Kind = 'morning' | 'afternoon' | 'evening';
+export type Kind = 'morning' | 'afternoon' | 'evening' | 'night';
+
+/** Evening and night briefs reuse the day's data and never read your tools. */
+export const neverPulls = (kind: Kind) => kind === 'evening' || kind === 'night';
 
 export interface SourceReport {
   toolkit: string;

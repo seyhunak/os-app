@@ -7,7 +7,7 @@ const DAYS = [
   { value: 1, short: 'M', name: 'Monday' }, { value: 2, short: 'T', name: 'Tuesday' }, { value: 3, short: 'W', name: 'Wednesday' },
   { value: 4, short: 'T', name: 'Thursday' }, { value: 5, short: 'F', name: 'Friday' }, { value: 6, short: 'S', name: 'Saturday' }, { value: 0, short: 'S', name: 'Sunday' },
 ];
-const DEFAULT_TIME: Record<Kind, string> = { morning: '07:30', afternoon: '13:30', evening: '18:30' };
+const DEFAULT_TIME: Record<Kind, string> = { morning: '07:30', afternoon: '13:30', evening: '18:30', night: '21:30' };
 
 export const describeDays = (days: number[]) => {
   const sorted = [...days].sort().join();
@@ -80,8 +80,9 @@ export function ScheduleEditor({ initial, submitLabel, onSubmit, onCancel }: Pro
         <Chip label="Morning" selected={kind === 'morning'} onPress={() => chooseKind('morning')} />
         <Chip label="Afternoon" selected={kind === 'afternoon'} onPress={() => chooseKind('afternoon')} />
         <Chip label="Evening" selected={kind === 'evening'} onPress={() => chooseKind('evening')} />
+        <Chip label="Night" selected={kind === 'night'} onPress={() => chooseKind('night')} />
       </View>
-      {kind === 'evening' ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 19 }}>Evening briefs reuse the day's data and never pull from your tools again, so pair this with a morning brief.</Text> : null}
+      {kind === 'evening' || kind === 'night' ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 19 }}>Evening and night briefs reuse the day's data and never pull from your tools again, so pair this with a morning brief.</Text> : null}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 12 }}>
         <Stepper label="hour" value={time.slice(0, 2)} onChange={(d) => setClock(hour + d, minute)} />
         <Text style={{ color: c.muted, fontSize: 24, fontFamily: F.sansBold }}>:</Text>

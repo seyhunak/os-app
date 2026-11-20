@@ -9,7 +9,7 @@ import { isOldKey, migrateOldCopy } from './core/migrate';
 import { createOs, type Os } from './core/os';
 import { reminders } from './core/schedule';
 
-const KIND_TITLE: Record<Schedule['kind'], string> = { morning: 'Morning brief', afternoon: 'Afternoon brief', evening: 'Evening brief' };
+const KIND_TITLE: Record<Schedule['kind'], string> = { morning: 'Morning brief', afternoon: 'Afternoon brief', evening: 'Evening brief', night: 'Night brief' };
 const OLD_AI_KEY = 'os.offlineOpenRouterKey';
 const OLD_CONNECTION = 'os.connection';
 
