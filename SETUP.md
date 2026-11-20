@@ -63,7 +63,7 @@ cd app && npx expo run:android --variant release
 ## 3. Set it up in the app
 
 1. **Composio.** Paste your Composio API key. It's checked with Composio, then kept in the phone's Keychain or Keystore.
-2. **Tools.** Choose what your brief reads, and connect each tool through Composio.
+2. **Tools.** Choose what your brief reads, and connect each tool through Composio. Tools are grouped by category, A to Z, and only the ones you tick are read.
 3. **First brief.** Paste your goals and, optionally, an OpenRouter key, then write your first brief.
 4. **Schedule.** Add a schedule and allow notifications. At each time, the phone reminds you, and the brief is written when you open it. See [Schedules](README.md#schedules).
 
@@ -116,4 +116,5 @@ Then build onto your phone again, as in step 2. Your data stays on the phone acr
 | A scheduled brief didn't appear | Schedules write the brief when you open the reminder or the app, not in the background |
 | `xcodebuild` fails with a signing error | Choose your team in Xcode, as in the iPhone steps |
 | The app won't install on your iPhone | Unlock the phone and try again. The first try sometimes fails |
-| The app crashes at start after updating | Run `npx expo prebuild --platform ios` again, then rebuild, since new native modules were added |
+| `pod install` fails with `Unicode Normalization not appropriate for ASCII-8BIT` | Your shell has no UTF-8 locale. Run the build again with `LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8` in front of it |
+| The app crashes at start after updating Run `npx expo prebuild --platform ios` again, then rebuild, since new native modules were added |
