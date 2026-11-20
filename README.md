@@ -34,7 +34,7 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 ## How it works
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
-2. **Choose your tools.** Gmail, Outlook, Google Calendar, Calendly, Google Tasks, Google Drive, Notion, Slack, GitHub, GitLab, Jira, Linear, Asana, Trello, Todoist, HubSpot and Hacker News.
+2. **Choose your tools.** Gmail, Outlook, Google Calendar, Calendly, Google Tasks, Google Drive, Notion, Slack, GitHub, GitLab, Jira, Linear, Asana, Trello, Todoist, ClickUp, Microsoft To Do, Microsoft Teams, Zoom, Sentry, HubSpot, Salesforce and Hacker News. Only the tools you select are read; the rest are skipped.
 3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Choose the model in Settings, where cheap models that write well are recommended. Without a key, you get a plain summary of what was read.
 4. **Choose a schedule.** Pick morning, afternoon, evening or night briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
 
@@ -95,6 +95,12 @@ Earlier versions ran a server on your Mac, reached over Tailscale. The app no lo
 | Jira | Unresolved issues assigned to you |
 | GitLab | Open issues and merge requests assigned to you |
 | HubSpot | Names, stages, close dates and amounts of open deals |
+| Salesforce | Names, stages, close dates and amounts of open opportunities you own |
+| ClickUp | Open tasks assigned to you, their lists and due dates |
+| Microsoft To Do | Open tasks and due dates from up to 10 lists |
+| Microsoft Teams | The latest message in each chat active in the last 7 days, as plain text |
+| Zoom | Topics and times of your meetings this week |
+| Sentry | Unresolved issues assigned to you, seen in the last 14 days |
 | Hacker News | AI-related stories from the front page |
 
 - **Read-only.** OS only calls read operations. It can't send, post or delete anything.
@@ -219,7 +225,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 - Scheduled briefs are written when you open the app or its reminder, not in the background.
 - Android builds haven't been tested yet. iOS has.
 - Free models and the default paid model are cheap and can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't yours.
-- Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. A tool that fails is named in the brief.
+- Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. Salesforce, ClickUp, Microsoft To Do, Microsoft Teams, Zoom and Sentry are new and untested on real accounts. A tool that fails is named in the brief.
 - Calendars cover this week only, through Sunday, so next week's meetings don't appear until Monday. Email covers your last 5 from the last 3 days.
 - You can select tools from the list above. Other Composio tools need a collector first.
 - OS never disconnects your accounts. Manage those at [composio.dev](https://composio.dev).

@@ -988,6 +988,94 @@ describe('more tools', () => {
   });
 });
 
+describe('the newer tools', () => {
+  const account = { id: 'ca_1', toolkit: 'x', label: 'x' };
+  const collect = async (slug: string, reply: (request: ProxyRequest) => unknown) => {
+    const seen: ProxyRequest[] = [];
+    const { gateway } = fakeGateway({ proxy: async (request) => { seen.push(request); return reply(request); } });
+    const toolkit = toolkitBySlug(slug)!;
+    const items = await toolkit.collect(gateway, account, NOW, 'UTC');
+    return { items, seen, summary: items.length ? toolkit.summarize(items as Array<Record<string, unknown>>, 'UTC') : '' };
+  };
+
+  it('only ever reads', async () => {
+    for (const slug of ['salesforce', 'clickup', 'microsoft_todo', 'microsoft_teams', 'zoom', 'sentry']) {
+      const { seen } = await collect(slug, () => ({}));
+      assert.ok(seen.length && seen.every((r) => r.method === 'GET'), slug);
+    }
+  });
+
+  it('reads your open Salesforce opportunities', async () => {
+    const { items, seen, summary } = await collect('salesforce', (r) => (r.endpoint.endsWith('/userinfo')
+      ? { user_id: "005ABC'--" }
+      : { records: [{ Name: 'Acme renewal', StageName: 'Proposal', CloseDate: '2026-11-20', Amount: 5000 }] }));
+    assert.ok(String(seen[1]!.query!.q).includes("OwnerId = '005ABC'"));
+    assert.deepEqual(items, [{ deal: 'Acme renewal', stage: 'Proposal', closes: '2026-11-20', amount: 5000 }]);
+    assert.equal(summary, '1 open deal. Next to close: Acme renewal on 2026-11-20.');
+  });
+
+  it('reads ClickUp tasks assigned to you in every workspace', async () => {
+    const { items, seen, summary } = await collect('clickup', (r) => {
+      if (r.endpoint.endsWith('/user')) return { user: { id: 42 } };
+      if (r.endpoint.endsWith('/team')) return { teams: [{ id: 't1', name: 'Work' }] };
+      return { tasks: [{ name: 'Ship v2', due_date: String(Date.parse('2026-11-09T12:00:00Z')), list: { name: 'Launch' }, status: { status: 'in progress' } }, { name: '' }] };
+    });
+    like(seen[2]!.query, { 'assignees[]': '42', include_closed: 'false' });
+    assert.deepEqual(items, [{ task: 'Ship v2', due: '2026-11-09', list: 'Launch', status: 'in progress' }]);
+    assert.equal(summary, '1 open task, 1 with a due date. Next due: Ship v2 on 2026-11-09.');
+  });
+
+  it('reads open Microsoft To Do tasks from each list', async () => {
+    const { items } = await collect('microsoft_todo', (r) => (r.endpoint.endsWith('/lists')
+      ? { value: [{ id: 'l1', displayName: 'Tasks' }] }
+      : { value: [{ title: 'Call the bank', status: 'notStarted', importance: 'high', dueDateTime: { dateTime: '2026-11-07T00:00:00.0000000' } }, { title: 'Done', status: 'completed' }] }));
+    assert.deepEqual(items, [{ task: 'Call the bank', due: '2026-11-07', list: 'Tasks', important: true }]);
+  });
+
+  it('keeps recent Teams chats as plain text', async () => {
+    const { items, summary } = await collect('microsoft_teams', () => ({ value: [
+      { topic: null, chatType: 'oneOnOne', lastMessagePreview: { createdDateTime: '2026-11-05T09:00:00Z', body: { content: '<p>Can you send the <b>deck</b>?</p>' }, from: { user: { displayName: 'Pat' } } } },
+      { topic: 'Old', chatType: 'group', lastMessagePreview: { createdDateTime: '2026-10-01T09:00:00Z', body: { content: 'stale' } } },
+    ] }));
+    assert.deepEqual(items, [{ chat: 'Direct message', from: 'Pat', text: 'Can you send the deck ?', ts: '2026-11-05T09:00:00Z' }]);
+    assert.equal(summary, '1 chat active in the last 7 days. Latest: Pat in Direct message.');
+  });
+
+  it('keeps Zoom meetings in this week only', async () => {
+    const { items, summary } = await collect('zoom', () => ({ meetings: [
+      { topic: 'Board prep', start_time: '2026-11-06T15:00:00Z', duration: 45 },
+      { topic: 'Next week', start_time: '2026-11-10T15:00:00Z', duration: 30 },
+    ] }));
+    assert.deepEqual(items, [{ title: 'Board prep', start: '2026-11-06T15:00:00Z', minutes: 45 }]);
+    assert.equal(summary, '1 meeting this week: Board prep (Fri).');
+  });
+
+  it('reads unresolved Sentry issues assigned to you', async () => {
+    const { items, seen, summary } = await collect('sentry', (r) => (r.endpoint.endsWith('/organizations/')
+      ? [{ slug: 'acme' }]
+      : [{ shortId: 'API-1', title: 'TypeError in checkout', level: 'error', project: { slug: 'api' }, count: '12', lastSeen: 'l' }]));
+    like(seen[1]!.query, { query: 'is:unresolved assigned:me' });
+    like(items[0], { id: 'API-1', state: 'error', team: 'api' });
+    assert.equal(summary, '1 issue: 1 error.');
+  });
+});
+
+describe('choosing tools', () => {
+  it('reads only the tools you selected, and skips the rest', async () => {
+    const proxied: string[] = [];
+    const { gateway } = fakeGateway({
+      listActiveAccounts: async () => [{ id: 'ca_1', toolkit: 'gmail', label: 'gmail' }, { id: 'ca_2', toolkit: 'zoom', label: 'zoom' }, { id: 'ca_3', toolkit: 'clickup', label: 'clickup' }],
+      proxy: async (r) => { proxied.push(r.endpoint); return {}; },
+    });
+    const { os } = setup({ gateway });
+    await os.saveComposioKey('ak_supersecretvalue');
+    await os.selectToolkits(['zoom']);
+    const brief = await os.generateBrief('morning');
+    assert.deepEqual(brief.sources.map((s) => s.toolkit), ['zoom']);
+    assert.ok(proxied.every((e) => e.includes('zoom.us')), proxied.join(', '));
+  });
+});
+
 describe('steering toward goals', () => {
   it('asks for a focus and for goal-first ranking', async () => {
     let system = '';

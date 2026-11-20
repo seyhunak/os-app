@@ -30,6 +30,7 @@ export interface Status {
 export interface Toolkit {
   slug: string;
   name: string;
+  category: string;
   description: string;
   noAuth: boolean;
   selected: boolean;
