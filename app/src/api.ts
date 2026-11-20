@@ -1,6 +1,6 @@
 import type { Os } from './core/os';
 
-export type Kind = 'morning' | 'afternoon' | 'evening';
+export type Kind = 'morning' | 'afternoon' | 'evening' | 'night';
 
 export type Provider = 'openrouter';
 

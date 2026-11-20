@@ -16,6 +16,8 @@ export interface Priority {
 
 export interface NoiseItem {
   item: string;
+  /** The tool it came from, when the model named one. */
+  source: string | null;
   reason: string | null;
   /** The score that kept it below the cut, when the model wrote one. */
   score: number | null;
@@ -32,7 +34,11 @@ export interface ParsedBrief {
   /** False for older briefs, which render as plain Markdown. */
   structured: boolean;
   notice: string | null;
-  /** The one thing to do first and the goal it moves. */
+  /** The brief's own first line, such as "Good morning". */
+  greeting: string | null;
+  /** The 3 most important things to do, each with its source and the goal it moves. */
+  focusItems: Priority[];
+  /** Older briefs wrote focus as a sentence or two instead of a list. */
   focus: string | null;
   priorities: Priority[];
   /** Used when the priorities section isn't a ranked list, such as an unranked digest. */
@@ -116,11 +122,14 @@ export function parsePriority(line: string, knownSources: string[] = []): Priori
 }
 
 function parseNoise(line: string): NoiseItem {
-  const [item, ...rest] = clean(line).replace(/[[\]]/g, '').split(ARROW);
+  let text = clean(line);
+  const source = text.match(/^\[([^\]]+)\]\s*/);
+  if (source) text = text.slice(source[0].length);
+  const [item, ...rest] = text.replace(/[[\]]/g, '').split(ARROW);
   const [scored = '', ...why] = rest.join(' ').split('|');
   const reason = why.join('|').replace(/^\s*reason:\s*/i, '').trim();
   const score = scored.match(/^\s*(?:score:?\s*)?(\d{1,3})\b/i);
-  return { item: item!.trim(), reason: reason || null, score: score ? Number(score[1]) : null };
+  return { item: item!.trim(), source: source?.[1]?.trim() ?? null, reason: reason || null, score: score ? Number(score[1]) : null };
 }
 
 const STATUS: Array<[RegExp, Exclude<GoalStatus, null>]> = [
@@ -157,9 +166,12 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
   const sections = sectionsOf(markdown);
   // Older briefs called this section "Today's Priorities" and kept the noise inside it.
   const prioritiesRaw = sections.get('signals') ?? sections.get("today's priorities");
-  const goalsRaw = sections.get('goals');
+  const goalsRaw = sections.get('goal progress') ?? sections.get('goals');
+  const greeting = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
+  const focusRaw = sections.get('focus') ?? '';
+  const focusItems = bullets(focusRaw).map((line) => parsePriority(line, [...knownSources, 'Goals']));
   const notice = markdown.split('\n').find((l) => l.trim().startsWith('>'))?.replace(/^\s*>\s*/, '').trim() ?? null;
-  const empty: ParsedBrief = { structured: false, notice, focus: null, priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
+  const empty: ParsedBrief = { structured: false, notice, greeting, focusItems: [], focus: null, priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
   if (prioritiesRaw === undefined) return empty;
 
   const noiseAt = prioritiesRaw.search(/^\s*\*{0,2}\s*Noise eliminated/im);
@@ -178,7 +190,9 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
   return {
     structured: true,
     notice,
-    focus: clean(sections.get('focus') ?? '') || null,
+    greeting,
+    focusItems,
+    focus: focusItems.length ? null : clean(focusRaw) || null,
     priorities: ranked ? priorities : [],
     prioritiesText: ranked ? null : signalsPart.trim() || null,
     // The model sometimes repeats a signal here, so anything already a signal is dropped.

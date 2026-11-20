@@ -1,5 +1,6 @@
-import { HostGrotesk_400Regular, HostGrotesk_500Medium, HostGrotesk_600SemiBold } from '@expo-google-fonts/host-grotesk';
-import { AtkinsonHyperlegibleMono_400Regular, AtkinsonHyperlegibleMono_500Medium } from '@expo-google-fonts/atkinson-hyperlegible-mono';
+import { InstrumentSerif_400Regular } from '@expo-google-fonts/instrument-serif';
+import { Geist_400Regular, Geist_500Medium, Geist_600SemiBold } from '@expo-google-fonts/geist';
+import { GeistMono_400Regular, GeistMono_500Medium } from '@expo-google-fonts/geist-mono';
 import { useFonts } from 'expo-font';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,7 +15,7 @@ import { SchedulesScreen } from './src/screens/Schedules';
 import { SettingsScreen } from './src/screens/Settings';
 import { TodayScreen } from './src/screens/Today';
 import { UpdateModal } from './src/UpdateModal';
-import { ErrorNote, F, Loading, message, Screen, ThemeProvider, Title, useColors } from './src/ui';
+import { ErrorNote, F, Loading, message, R, Screen, ThemeProvider, Title, useColors } from './src/ui';
 
 type Tab = 'today' | 'schedule' | 'settings';
 const TABS: Array<{ id: Tab; label: string }> = [
@@ -41,14 +42,14 @@ function Header({ onUpdate }: { onUpdate(): void }) {
   const c = useColors();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 8, backgroundColor: c.bg }}>
-      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 22, letterSpacing: -0.6 }}>OS</Text>
+      <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 30, lineHeight: 32, letterSpacing: -0.4 }}>os</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Add an update"
         onPress={onUpdate}
-        style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 18, borderRadius: 6, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.8 : 1 })}
+        style={({ pressed }) => ({ minHeight: 44, paddingHorizontal: 20, borderRadius: R.pill, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.8 : 1 })}
       >
-        <Text style={{ color: c.onAccent, fontFamily: F.sansMedium, fontSize: 15 }}>Update</Text>
+        <Text style={{ color: c.onAccent, fontFamily: F.sansMedium, fontSize: 15 }}>update</Text>
       </Pressable>
     </View>
   );
@@ -160,11 +161,12 @@ function Root() {
 export default function App() {
   // Falls back to system fonts if loading fails, rather than leaving a blank screen.
   const [fontsLoaded, fontError] = useFonts({
-    HostGrotesk_400Regular,
-    HostGrotesk_500Medium,
-    HostGrotesk_600SemiBold,
-    AtkinsonHyperlegibleMono_400Regular,
-    AtkinsonHyperlegibleMono_500Medium,
+    InstrumentSerif_400Regular,
+    Geist_400Regular,
+    Geist_500Medium,
+    Geist_600SemiBold,
+    GeistMono_400Regular,
+    GeistMono_500Medium,
   });
   if (!fontsLoaded && !fontError) return null;
 

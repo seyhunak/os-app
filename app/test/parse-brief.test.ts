@@ -50,7 +50,7 @@ describe('model habits', () => {
 
   it("doesn't repeat signals under Left Out", () => {
     const parsed = parseBrief('### Signals\n- 🔥 [Sam] Contract redlines → Reply | Score: 88\n### Left Out\n- [Sam] Contract redlines → 88 | already included as signal\n- Digest → 40 | no goal\n- Other → 90 | Already listed');
-    assert.deepEqual(parsed.noise, [{ item: 'Digest', reason: 'no goal', score: 40 }]);
+    assert.deepEqual(parsed.noise, [{ item: 'Digest', source: null, reason: 'no goal', score: 40 }]);
   });
 });
 
@@ -59,7 +59,7 @@ describe('new layout', () => {
     const parsed = parseBrief('### Signals\n- ⚡ [A] Low → x | Score: 61\n- 🔥 [B] High → y | Score: 90\n### Goals\n- ⚪ G\n### Sources\nx\n### Left Out\n- Noise → score 5 | spam\n### Note for Next Brief\nN');
     assert.equal(parsed.structured, true);
     assert.deepEqual(parsed.priorities.map((p) => p.headline), ['High', 'Low']);
-    assert.deepEqual(parsed.noise, [{ item: 'Noise', reason: 'spam', score: 5 }]);
+    assert.deepEqual(parsed.noise, [{ item: 'Noise', source: null, reason: 'spam', score: 5 }]);
     assert.equal(parsed.note, 'N');
   });
 });
@@ -96,7 +96,7 @@ Check the contract.`;
     const parsed = parseBrief(brief);
     assert.equal(parsed.structured, true);
     assert.deepEqual(parsed.priorities.map((p) => p.headline), ['Contract', 'Call']);
-    assert.deepEqual(parsed.noise, [{ item: 'Newsletter', reason: 'irrelevant', score: 40 }]);
+    assert.deepEqual(parsed.noise, [{ item: 'Newsletter', source: null, reason: 'irrelevant', score: 40 }]);
     like(parsed.goals[0], { goal: 'Ship', status: 'attention' });
     assert.ok(parsed.sources!.includes('- **Gmail:** 2 items'));
     assert.equal(parsed.note, 'Check the contract.');
@@ -150,5 +150,39 @@ Nothing to carry over.`);
     assert.deepEqual(parsed.priorities, []);
     assert.equal(parsed.prioritiesText, 'No signals today.');
     assert.equal(parsed.goalsText, 'No goals set yet.');
+  });
+});
+
+describe('the Lumen brief layout', () => {
+  const md = [
+    '# Good night',
+    '### Focus',
+    '- [Gmail] Reply to Pat → the invoice is due Friday | Goal: Get paid on time',
+    '- [Goals] Draft the pitch outline → nothing moved it this week | Goal: Raise a seed round',
+    '- [Linear] Close the login bug → it blocks the beta | Goal: Ship the beta',
+    '### Signals',
+    '- 🔥 [Gmail] Invoice question from Pat → Reply with the figures | Goal: Get paid on time | Score: 81',
+    '### Left Out',
+    '- [Hacker News] A thread on databases → 30 | not tied to a goal',
+    '### Goal Progress',
+    '- 🔴 Get paid on time → invoice overdue → Reply to Pat',
+    '### Sources',
+    '- **Gmail:** 5 emails',
+    '### Note for Next Brief',
+    'Check whether Pat paid.',
+  ].join('\n');
+
+  it('reads the greeting, the focus list, noise sources and goal progress', () => {
+    const parsed = parseBrief(md, ['Gmail', 'Linear', 'Hacker News']);
+    assert.equal(parsed.greeting, 'Good night');
+    assert.deepEqual(parsed.focusItems.map((f) => [f.source, f.headline, f.goal]), [
+      ['Gmail', 'Reply to Pat', 'Get paid on time'],
+      ['Goals', 'Draft the pitch outline', 'Raise a seed round'],
+      ['Linear', 'Close the login bug', 'Ship the beta'],
+    ]);
+    assert.equal(parsed.focus, null);
+    assert.deepEqual(parsed.noise, [{ item: 'A thread on databases', source: 'Hacker News', reason: 'not tied to a goal', score: 30 }]);
+    assert.equal(parsed.goals[0]?.status, 'at-risk');
+    assert.equal(parsed.note, 'Check whether Pat paid.');
   });
 });

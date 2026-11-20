@@ -7,19 +7,20 @@ import type { Api } from '../api';
 import { useRefresh } from '../refresh';
 import { autoBriefFor, freshness } from '../staleBrief';
 import { parseBrief, type Goal, type GoalStatus, type NoiseItem, type ParsedBrief, type Priority } from '../parseBrief';
-import { Button, ErrorNote, F, Loading, message, R, Screen, useColors, type Colors } from '../ui';
+import { Button, display, ErrorNote, F, Loading, message, R, Screen, useColors, type Colors } from '../ui';
 
-const TWO_COLUMNS_AT = 860;
-const PAGE_WIDTH = 1040;
-/** Every brief reads your updates from this many days back. */
-const LEDGER_DAYS = 14;
-const LEDGER_SHOWN = 5;
+const WIDE_AT = 860;
+/** One readable column; the page doesn't spread out on a tablet. */
+const PAGE_WIDTH = 720;
+/** The newest updates shown beside the note for the next brief. */
+const LEDGER_SHOWN = 3;
 
-const KINDS: Kind[] = ['morning', 'afternoon', 'evening'];
-const KIND_LABEL: Record<Kind, string> = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening' };
-const edition = (kind: Kind) => `${KIND_LABEL[kind]} brief`;
-/** The brief that fits the time of day: before noon, before five, then evening. */
-export const kindForHour = (hour: number): Kind => (hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : 'evening');
+const KINDS: Kind[] = ['morning', 'afternoon', 'evening', 'night'];
+const KIND_LABEL: Record<Kind, string> = { morning: 'Morning', afternoon: 'Afternoon', evening: 'Evening', night: 'Night' };
+const GREETING: Record<Kind, string> = { morning: 'Good morning', afternoon: 'Good afternoon', evening: 'Good evening', night: 'Good night' };
+const edition = (kind: Kind) => `${KIND_LABEL[kind] ?? kind} brief`;
+/** The brief that fits the time of day: morning until noon, afternoon until five, evening until nine, then night. */
+export const kindForHour = (hour: number): Kind => (hour < 5 ? 'night' : hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 21 ? 'evening' : 'night');
 // Built from parts, because iOS orders a combined weekday and date oddly ("6 November 2026 Friday").
 const part = (iso: string, options: Intl.DateTimeFormatOptions) => new Date(iso).toLocaleDateString(undefined, options);
 const longDate = (iso: string) => `${part(iso, { weekday: 'long' })}, ${part(iso, { day: 'numeric', month: 'long', year: 'numeric' })}`;
@@ -56,7 +57,7 @@ function Head({ children, aside, tone }: { children: string; aside?: string | nu
   const c = useColors();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-      <Text accessibilityRole="header" style={{ color: tone ?? c.text, fontFamily: F.display, fontSize: 20, lineHeight: 24, letterSpacing: -0.5 }}>{children}</Text>
+      <Text accessibilityRole="header" style={{ color: tone ?? c.text, ...display, fontSize: 30, lineHeight: 32 }}>{children}</Text>
       {aside ? <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 13, lineHeight: 18 }}>{aside}</Text> : null}
     </View>
   );
@@ -81,8 +82,8 @@ function Row({ children, first, selected }: { children: ReactNode; first?: boole
 function Tag({ label, fg, bg, mono }: { label: string; fg: string; bg: string; mono?: boolean }) {
   const c = useColors();
   return (
-    <View style={{ borderWidth: 1, borderColor: bg === 'transparent' ? c.line : bg, backgroundColor: bg, borderRadius: R.chip, paddingHorizontal: 6, paddingVertical: 1 }}>
-      <Text style={{ color: fg, fontFamily: mono ? F.mono : F.sansMedium, fontSize: 12, lineHeight: 17 }}>{label}</Text>
+    <View style={{ borderWidth: 1, borderColor: bg === 'transparent' ? c.line : bg, backgroundColor: bg, borderRadius: R.chip, paddingHorizontal: 8, paddingVertical: 1 }}>
+      <Text style={{ color: fg, fontFamily: mono ? F.mono : F.sansMedium, fontSize: 12, lineHeight: 17, textTransform: 'lowercase' }}>{label}</Text>
     </View>
   );
 }
@@ -99,10 +100,10 @@ function Collapsible({ title, aside, defaultOpen, children }: { title: string; a
         onPress={() => setOpen((o) => !o)}
         style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
       >
-        <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 20, lineHeight: 24, letterSpacing: -0.5 }}>{title}</Text>
+        <Text accessibilityRole="header" style={{ color: c.text, ...display, fontSize: 30, lineHeight: 32 }}>{title}</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
           {aside ? <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 13 }}>{aside}</Text> : null}
-          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 14 }}>{open ? 'Hide' : 'Show'}</Text>
+          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 14 }}>{open ? 'hide' : 'show'}</Text>
         </View>
       </Pressable>
       {open ? children : null}
@@ -112,89 +113,53 @@ function Collapsible({ title, aside, defaultOpen, children }: { title: string; a
 
 // ——— Masthead and summary ————————————————————————————————————————————
 
-function Masthead({ brief, wide }: { brief: Brief; wide: boolean }) {
+function Masthead({ brief, greeting, wide }: { brief: Brief; greeting: string; wide: boolean }) {
   const c = useColors();
   const meta: TextStyle = { color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 };
   const how = brief.trigger === 'offline'
     ? 'offline draft'
     : brief.trigger === 'schedule' ? 'on schedule' : 'on request';
   return (
-    <View style={{ gap: 6 }}>
-      <View style={{ flexDirection: wide ? 'row' : 'column', justifyContent: 'space-between', alignItems: wide ? 'flex-end' : 'flex-start', gap: wide ? 12 : 4 }}>
-        <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: wide ? 40 : 32, lineHeight: wide ? 42 : 34, letterSpacing: -1.2 }}>{edition(brief.kind)}</Text>
-        <Text style={{ ...meta, color: c.ink2, fontFamily: F.sansMedium }}>{longDate(brief.createdAt)}</Text>
-      </View>
+    <View style={{ gap: 8 }}>
+      <Text accessibilityRole="header" style={{ color: c.text, ...display, fontSize: wide ? 64 : 52, lineHeight: wide ? 62 : 50 }}>{greeting}</Text>
+      <Text style={{ ...meta, color: c.ink2, fontFamily: F.sansMedium }}>{`${edition(brief.kind)}, ${longDate(brief.createdAt)}`}</Text>
       <Text style={meta}>
         <Text style={{ color: c.cool, fontFamily: F.mono }}>{clock(brief.createdAt)}</Text>
-        {`  ·  Written ${how}  ·  ${brief.generator === 'ai' ? 'Ranked by AI' : 'Unranked digest'}`}
+        {`  Written ${how}. ${brief.generator === 'ai' ? 'Ranked by AI against your goals.' : 'Unranked digest.'}`}
       </Text>
     </View>
   );
 }
 
-interface Tally { signals: number; cut: number; scanned: number; tools: number; failed: number; atRisk: number; updates: number }
-
-function tallyOf(brief: Brief, parsed: ParsedBrief, updates: number): Tally {
-  return {
-    signals: parsed.priorities.length,
-    cut: parsed.noise.length,
-    scanned: brief.sources.filter((s) => SCANNED.has(s.status)).length,
-    tools: brief.sources.length,
-    failed: brief.sources.filter((s) => s.status === 'error' || s.status === 'rate_limited').length,
-    atRisk: parsed.goals.filter((g) => g.status === 'at-risk').length,
-    updates,
-  };
-}
-
-/** The brief at a glance: one figure per cell, measured, never decorated. */
-function Summary({ tally, wide }: { tally: Tally; wide: boolean }) {
+/** The 3 things to do first. Brass, because they're yours to do. */
+function Focus({ items, text, wide }: { items: Priority[]; text: string | null; wide: boolean }) {
   const c = useColors();
-  const cells: Array<{ label: string; value: string; note?: string; tone?: string }> = [
-    { label: 'Signals', value: String(tally.signals), note: tally.signals ? 'worth your time' : 'nothing ranked' },
-    { label: 'Left out', value: String(tally.cut), note: 'cut as noise' },
-    { label: 'Tools scanned', value: `${tally.scanned}/${tally.tools}`, note: tally.failed ? `${tally.failed} failed` : !tally.tools ? 'none chosen' : tally.scanned < tally.tools ? `${tally.tools - tally.scanned} not read` : 'all read', ...(tally.failed ? { tone: c.danger } : {}) },
-    { label: 'Goals at risk', value: String(tally.atRisk), ...(tally.atRisk ? { tone: c.danger } : {}) },
-    { label: 'Updates read', value: String(tally.updates), note: `last ${LEDGER_DAYS} days` },
-  ];
-  const total = tally.signals + tally.cut;
-  const kept = total ? Math.round((tally.signals / total) * 100) : 0;
   return (
-    <Panel>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-        {cells.map((cell, i) => (
-          <View
-            key={cell.label}
-            accessibilityLabel={`${cell.label}: ${cell.value}${cell.note ? `, ${cell.note}` : ''}`}
-            style={{ flexGrow: 1, flexBasis: wide ? 0 : '50%', paddingHorizontal: 16, paddingVertical: 14, gap: 2, borderColor: c.line, borderLeftWidth: wide && i ? 1 : !wide && i % 2 ? 1 : 0, borderTopWidth: !wide && i > 1 ? 1 : 0 }}
-          >
-            <Text style={{ color: c.muted, fontFamily: F.sansMedium, fontSize: 12, lineHeight: 16 }}>{cell.label}</Text>
-            <Text style={{ color: cell.tone ?? c.text, fontFamily: F.mono, fontSize: 28, lineHeight: 34, letterSpacing: -0.8 }}>{cell.value}</Text>
-            {cell.note ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12, lineHeight: 16 }}>{cell.note}</Text> : null}
-          </View>
-        ))}
-      </View>
-      {total ? (
-        <View style={{ borderTopWidth: 1, borderColor: c.line, paddingHorizontal: 16, paddingVertical: 12, gap: 8 }}>
-          <View accessibilityLabel={`Signal to noise: kept ${tally.signals} of ${total}`} style={{ flexDirection: 'row', height: 6, borderRadius: 3, overflow: 'hidden', backgroundColor: c.deep, gap: 2 }}>
-            <View style={{ flex: tally.signals, backgroundColor: c.cool }} />
-            <View style={{ flex: tally.cut, backgroundColor: c.line2 }} />
-          </View>
-          <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12, lineHeight: 16 }}>
-            Signal vs noise: kept <Text style={{ color: c.cool, fontFamily: F.mono }}>{tally.signals}</Text> of <Text style={{ fontFamily: F.mono }}>{total}</Text> scored items (<Text style={{ fontFamily: F.mono }}>{kept}%</Text>). Items under 60 are cut.
-          </Text>
+    <View style={{ gap: 12 }}>
+      <Head aside={items.length ? `${items.length} to do` : null}>focus</Head>
+      {items.length ? (
+        <Panel>
+          {items.map((item, i) => (
+            <Row key={i} first={i === 0} selected={i === 0}>
+              <View style={{ flexDirection: 'row', gap: 14 }}>
+                <Text style={{ color: i === 0 ? c.accent : c.muted, fontFamily: F.monoMedium, fontSize: 14, lineHeight: 26, width: 22 }}>{pad(i + 1)}</Text>
+                <View style={{ flex: 1, gap: 6 }}>
+                  <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: i === 0 && wide ? 20 : 18, lineHeight: i === 0 && wide ? 27 : 25 }}>{item.headline}</Text>
+                  {item.action ? <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>{item.action}</Text> : null}
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                    {item.source ? <Tag label={item.source} fg={c.ink2} bg="transparent" /> : null}
+                    {item.goal ? <Text style={{ flexShrink: 1, color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{`moves ${item.goal}`}</Text> : null}
+                  </View>
+                </View>
+              </View>
+            </Row>
+          ))}
+        </Panel>
+      ) : text ? (
+        <View style={{ borderWidth: 1, borderColor: c.line, borderLeftWidth: 2, borderLeftColor: c.accent, borderRadius: R.card, backgroundColor: c.card, padding: 16 }}>
+          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 18, lineHeight: 25 }}>{text}</Text>
         </View>
       ) : null}
-    </Panel>
-  );
-}
-
-/** Where to start. Amber, because it's yours to do. */
-function Focus({ text, wide }: { text: string; wide: boolean }) {
-  const c = useColors();
-  return (
-    <View style={{ borderWidth: 1, borderColor: c.line, borderLeftWidth: 3, borderLeftColor: c.accent, borderRadius: R.card, backgroundColor: c.card, padding: wide ? 22 : 16, gap: 8 }}>
-      <Text accessibilityRole="header" style={{ color: c.accent, fontFamily: F.sansBold, fontSize: 13, lineHeight: 18 }}>Focus first</Text>
-      <Text style={{ color: c.text, fontFamily: F.display, fontSize: wide ? 28 : 22, lineHeight: wide ? 34 : 28, letterSpacing: -0.7 }}>{text}</Text>
     </View>
   );
 }
@@ -203,18 +168,18 @@ function Focus({ text, wide }: { text: string; wide: boolean }) {
 
 function PriorityRow({ priority, rank, lead, wide }: { priority: Priority; rank: number; lead: boolean; wide: boolean }) {
   const c = useColors();
-  const size = lead ? (wide ? 30 : 24) : 19;
+  const size = lead ? (wide ? 20 : 18) : 16;
   return (
-    <Row first={rank === 1} selected={lead}>
+    <Row first={rank === 1}>
       <View style={{ flexDirection: 'row', gap: 14 }}>
-        <Text style={{ color: lead ? c.accent : c.muted, fontFamily: F.monoMedium, fontSize: 14, lineHeight: 22, width: 22 }}>{pad(rank)}</Text>
+        <Text style={{ color: c.muted, fontFamily: F.monoMedium, fontSize: 14, lineHeight: 22, width: 22 }}>{pad(rank)}</Text>
         <View style={{ flex: 1, gap: 8 }}>
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-            {priority.source ? <Tag label={priority.source} fg={c.cool} bg={c.coolSoft} /> : null}
+            {priority.source ? <Tag label={priority.source} fg={c.ink2} bg="transparent" /> : null}
             {priority.level === 'critical' ? <Tag label="Critical" fg={c.danger} bg={c.dangerSoft} /> : priority.level === 'supporting' ? <Tag label="Supporting" fg={c.muted} bg="transparent" /> : null}
             {priority.score !== null ? <Text style={{ color: c.cool, fontFamily: F.mono, fontSize: 13, lineHeight: 18, marginLeft: 'auto' }}>{priority.score}<Text style={{ color: c.muted }}>/100</Text></Text> : null}
           </View>
-          <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: size, lineHeight: size * 1.18, letterSpacing: lead ? -0.8 : -0.3 }}>{priority.headline}</Text>
+          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: size, lineHeight: size * 1.35 }}>{priority.headline}</Text>
           {priority.action ? (
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Text style={{ color: c.accent, fontFamily: F.sansBold, fontSize: lead ? 17 : 15, lineHeight: lead ? 25 : 22 }}>→</Text>
@@ -222,8 +187,8 @@ function PriorityRow({ priority, rank, lead, wide }: { priority: Priority; rank:
             </View>
           ) : null}
           {priority.goal || priority.unaligned ? (
-            <Text style={{ color: priority.goal ? c.accent : c.muted, fontFamily: F.sansMedium, fontSize: 13, lineHeight: 18 }}>
-              {priority.goal ? `Moves: ${priority.goal}` : 'Not tied to a goal'}
+            <Text style={{ color: priority.goal ? c.ink2 : c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
+              {priority.goal ? `against ${priority.goal}` : 'not tied to a goal'}
             </Text>
           ) : null}
         </View>
@@ -261,7 +226,8 @@ function LeftOut({ items }: { items: NoiseItem[] }) {
     <Panel tone="deep">
       {items.map((n, i) => (
         <Row key={i} first={i === 0}>
-          <View style={{ flexDirection: 'row', gap: 12, alignItems: 'baseline' }}>
+          <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+            {n.source ? <Tag label={n.source} fg={c.muted} bg="transparent" /> : null}
             <Text style={{ flex: 1, color: c.muted, fontFamily: F.text, fontSize: 15, lineHeight: 22, textDecorationLine: 'line-through' }}>{n.item}</Text>
             {n.score !== null ? <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 13 }}>{n.score}</Text> : null}
           </View>
@@ -285,31 +251,30 @@ function ToolRow({ source, first }: { source: Source; first: boolean }) {
   return (
     <Row first={first}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-        <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: tone }} />
         <Text style={{ flex: 1, color: c.text, fontFamily: F.sansMedium, fontSize: 16, lineHeight: 22 }}>{source.name}</Text>
         <Text style={{ color: c.cool, fontFamily: F.mono, fontSize: 13 }}>{count(source.items, 'item')}</Text>
         <Text style={{ color: tone === c.ok ? c.muted : tone, fontFamily: F.sansMedium, fontSize: 12, minWidth: 74, textAlign: 'right' }}>{SOURCE_STATUS[source.status] ?? source.label ?? source.status}</Text>
       </View>
-      {source.summary ? <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22, paddingLeft: 17 }}>{source.summary}</Text> : null}
-      {old.map((item, i) => <Text key={i} style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22, paddingLeft: 17 }}>{item}</Text>)}
-      {hidden > 0 ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, paddingLeft: 17 }}>and {hidden} more</Text> : null}
-      {source.detail ? <Text style={{ color: c.danger, fontFamily: F.sans, fontSize: 13, lineHeight: 18, paddingLeft: 17 }}>{source.detail}</Text> : null}
+      {source.summary ? <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22, }}>{source.summary}</Text> : null}
+      {old.map((item, i) => <Text key={i} style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22, }}>{item}</Text>)}
+      {hidden > 0 ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, }}>and {hidden} more</Text> : null}
+      {source.detail ? <Text style={{ color: c.danger, fontFamily: F.sans, fontSize: 13, lineHeight: 18, }}>{source.detail}</Text> : null}
     </Row>
   );
 }
 
 // ——— Ledger ————————————————————————————————————————————————————————
 
-/** Your own log: what this brief read, and what the next one will. Amber, because you wrote it. */
-function Ledger({ read, since }: { read: LedgerEntry[]; since: LedgerEntry[] }) {
+/** Your own log, newest first: the last few updates, and how many the next brief will read. */
+function Updates({ entries, since }: { entries: LedgerEntry[]; since: number }) {
   const c = useColors();
-  const shown = read.slice(0, LEDGER_SHOWN);
+  const shown = entries.slice(0, LEDGER_SHOWN);
   return (
     <View style={{ gap: 12 }}>
-      <Head aside={`${count(read.length, 'update')} read`}>Ledger</Head>
-      {since.length ? (
-        <Text style={{ color: c.accent, fontFamily: F.sansMedium, fontSize: 13, lineHeight: 18 }}>
-          {count(since.length, 'update')} logged since this brief. The next brief will read {since.length === 1 ? 'it' : 'them'}.
+      <Head aside={entries.length ? `last ${shown.length} of ${entries.length}` : null}>latest updates</Head>
+      {since ? (
+        <Text style={{ color: c.ink2, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
+          {count(since, 'update')} logged since this brief. The next brief will read {since === 1 ? 'it' : 'them'}.
         </Text>
       ) : null}
       {shown.length ? (
@@ -322,105 +287,91 @@ function Ledger({ read, since }: { read: LedgerEntry[]; since: LedgerEntry[] }) 
               </View>
             </Row>
           ))}
-          {read.length > shown.length ? <Row><Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13 }}>and {read.length - shown.length} earlier</Text></Row> : null}
         </Panel>
       ) : (
-        <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>No updates in the last {LEDGER_DAYS} days. Tap Update to log what you've done, and goals get real evidence.</Text>
+        <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>No updates yet. Tap update to log what you've done, and goals get real evidence.</Text>
       )}
     </View>
   );
 }
 
-/** Splits the ledger into what fed this brief (the window before it) and what came after. */
-export function ledgerFor(entries: LedgerEntry[], createdAt: string) {
-  const at = Date.parse(createdAt);
-  const from = at - LEDGER_DAYS * 86_400_000;
-  const newestFirst = [...entries].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  return {
-    read: newestFirst.filter((e) => Date.parse(e.createdAt) <= at && Date.parse(e.createdAt) >= from),
-    since: newestFirst.filter((e) => Date.parse(e.createdAt) > at),
-  };
-}
-
 // ——— The page ——————————————————————————————————————————————————————
+
+const HEALTH_ORDER: Array<Exclude<GoalStatus, null>> = ['on-track', 'attention', 'at-risk', 'unknown'];
+
+/** Goal health in one line, such as "2 on track, 1 at risk". */
+const healthOf = (goals: Goal[]) =>
+  HEALTH_ORDER.map((status) => [status, goals.filter((g) => g.status === status).length] as const)
+    .filter(([, n]) => n)
+    .map(([status, n]) => `${n} ${STATUS_LABEL[status].toLowerCase()}`)
+    .join(', ') || null;
 
 function FrontPage({ brief, wide, ledger }: { brief: Brief; wide: boolean; ledger: LedgerEntry[] | null }) {
   const c = useColors();
   const parsed = parseBrief(brief.markdown, brief.sources.map((s) => s.name));
-  const updates = ledger ? ledgerFor(ledger, brief.createdAt) : null;
+  const greeting = parsed.greeting ?? GREETING[brief.kind] ?? edition(brief.kind);
 
   if (!parsed.structured) {
     return (
       <View style={{ gap: 20 }}>
-        <Masthead brief={brief} wide={wide} />
+        <Masthead brief={brief} greeting={greeting} wide={wide} />
         <Markdown source={brief.markdown} />
       </View>
     );
   }
 
-  const tally = tallyOf(brief, parsed, updates?.read.length ?? 0);
+  const newestFirst = [...(ledger ?? [])].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  const since = newestFirst.filter((e) => Date.parse(e.createdAt) > Date.parse(brief.createdAt)).length;
   const listed = brief.sources.length > 0 && brief.sources.every((s) => s.summary !== undefined || s.contents);
-
-  const priorities = (
-    <View style={{ gap: 12 }}>
-      <Head aside={tally.signals ? `top ${tally.signals} by score` : null}>Priorities</Head>
-      {parsed.notice ? <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>{parsed.notice}</Text> : null}
-      {parsed.priorities.length ? (
-        <Panel>{parsed.priorities.map((p, i) => <PriorityRow key={i} priority={p} rank={i + 1} lead={i === 0} wide={wide} />)}</Panel>
-      ) : parsed.prioritiesText ? <Markdown source={parsed.prioritiesText} /> : (
-        <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15 }}>No signals today.</Text>
-      )}
-    </View>
-  );
-
-  const goals = parsed.goals.length || parsed.goalsText ? (
-    <View style={{ gap: 12 }}>
-      <Head aside={parsed.goals.length ? count(parsed.goals.length, 'goal') : null}>Goals</Head>
-      {parsed.goals.length ? <Panel>{parsed.goals.map((g, i) => <GoalRow key={i} goal={g} first={i === 0} />)}</Panel> : null}
-      {parsed.goalsText ? <Markdown source={parsed.goalsText} /> : null}
-    </View>
-  ) : null;
-
-  const tools = listed || parsed.sources ? (
-    <Collapsible title="Scanned tools" aside={listed ? `${tally.scanned}/${tally.tools} read` : null} defaultOpen={wide || tally.failed > 0}>
-      {listed ? <Panel>{brief.sources.map((s, i) => <ToolRow key={s.toolkit} source={s} first={i === 0} />)}</Panel> : <Markdown source={parsed.sources ?? ''} />}
-    </Collapsible>
-  ) : null;
-
-  const noise = parsed.noise.length ? (
-    <Collapsible title="Left out" aside={`${count(parsed.noise.length, 'item')} cut`} defaultOpen={false}>
-      <LeftOut items={parsed.noise} />
-    </Collapsible>
-  ) : null;
-
-  const ledgerBlock = updates ? <Ledger read={updates.read} since={updates.since} /> : null;
-  const note = parsed.note ? (
-    <View style={{ gap: 8 }}>
-      <Head>Note for next brief</Head>
-      <Panel tone="deep"><Row first><Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>{parsed.note}</Text></Row></Panel>
-    </View>
-  ) : null;
+  const scanned = brief.sources.filter((s) => SCANNED.has(s.status)).length;
 
   return (
-    <View style={{ gap: 24 }}>
-      <Masthead brief={brief} wide={wide} />
-      <Summary tally={tally} wide={wide} />
-      {parsed.focus ? <Focus text={parsed.focus} wide={wide} /> : null}
-      {wide ? (
-        <View style={{ flexDirection: 'row', gap: 24, alignItems: 'flex-start' }}>
-          <View style={{ flex: 3, gap: 28 }}>{priorities}{noise}{tools}</View>
-          <View style={{ flex: 2, gap: 28 }}>{goals}{ledgerBlock}{note}</View>
+    <View style={{ gap: 32 }}>
+      {/* Section one: the brief. */}
+      <View style={{ gap: 32 }}>
+        <Masthead brief={brief} greeting={greeting} wide={wide} />
+        {parsed.notice ? <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>{parsed.notice}</Text> : null}
+        {parsed.focusItems.length || parsed.focus ? <Focus items={parsed.focusItems} text={parsed.focus} wide={wide} /> : null}
+
+        <View style={{ gap: 12 }}>
+          <Head aside={parsed.priorities.length ? `${count(parsed.priorities.length, 'signal')}, scored against your goals` : null}>signals</Head>
+          {parsed.priorities.length ? (
+            <Panel>{parsed.priorities.map((p, i) => <PriorityRow key={i} priority={p} rank={i + 1} lead={i === 0} wide={wide} />)}</Panel>
+          ) : parsed.prioritiesText ? <Markdown source={parsed.prioritiesText} /> : (
+            <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15 }}>No signals today.</Text>
+          )}
         </View>
-      ) : (
-        <>
-          {priorities}
-          {goals}
-          {noise}
-          {tools}
-          {ledgerBlock}
-          {note}
-        </>
-      )}
+
+        {parsed.noise.length ? (
+          <Collapsible title="noise" aside={`${count(parsed.noise.length, 'item')} left out`} defaultOpen={false}>
+            <LeftOut items={parsed.noise} />
+          </Collapsible>
+        ) : null}
+
+        {parsed.goals.length || parsed.goalsText ? (
+          <View style={{ gap: 12 }}>
+            <Head aside={healthOf(parsed.goals)}>goal progress</Head>
+            {parsed.goals.length ? <Panel>{parsed.goals.map((g, i) => <GoalRow key={i} goal={g} first={i === 0} />)}</Panel> : null}
+            {parsed.goalsText ? <Markdown source={parsed.goalsText} /> : null}
+          </View>
+        ) : null}
+
+        {listed || parsed.sources ? (
+          <View style={{ gap: 12 }}>
+            <Head aside={listed ? `${scanned} of ${brief.sources.length} read` : null}>sources</Head>
+            {listed ? <Panel>{brief.sources.map((s, i) => <ToolRow key={s.toolkit} source={s} first={i === 0} />)}</Panel> : <Markdown source={parsed.sources ?? ''} />}
+          </View>
+        ) : null}
+      </View>
+
+      {/* Section two: what carries over. */}
+      <View style={{ gap: 24, backgroundColor: c.card, borderWidth: 1, borderColor: c.line, borderRadius: R.card, padding: wide ? 24 : 16 }}>
+        <View style={{ gap: 12 }}>
+          <Head>note for next brief</Head>
+          <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 16, lineHeight: 24 }}>{parsed.note ?? 'Nothing to carry over.'}</Text>
+        </View>
+        {ledger ? <Updates entries={newestFirst} since={since} /> : null}
+      </View>
     </View>
   );
 }
@@ -442,7 +393,7 @@ function StaleNote({ brief, generating }: { brief: Brief; generating: boolean })
 export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSchedules: boolean; onSchedule(): void }) {
   const c = useColors();
   const { width } = useWindowDimensions();
-  const wide = width >= TWO_COLUMNS_AT;
+  const wide = width >= WIDE_AT;
   const [briefs, setBriefs] = useState<Brief[] | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [busy, setBusy] = useState<Kind | 'refresh' | null>(null);
@@ -540,8 +491,8 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
   const earlier = briefs.filter((b) => b.id !== current?.id);
   const latest = briefs[0];
   const suggested = kindForHour(new Date().getHours());
-  // Evening briefs never pull, so a refetch late in the day writes an afternoon brief instead.
-  const refetchKind: Kind = suggested === 'evening' ? 'afternoon' : suggested;
+  // Evening and night briefs never pull, so a refetch late in the day writes an afternoon brief instead.
+  const refetchKind: Kind = suggested === 'evening' || suggested === 'night' ? 'afternoon' : suggested;
   const stale = current === latest && freshness(briefs, new Date()) === 'stale';
 
   return (
@@ -561,28 +512,28 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
 
       <View style={{ gap: 12 }}>
         <Rule strong />
-        <Head>New brief</Head>
-        <View style={{ flexDirection: wide ? 'row' : 'column', gap: 10 }}>
+        <Head>new brief</Head>
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
           {KINDS.map((k) => (
-            <View key={k} style={wide ? { flex: 1 } : null}>
-              <Button label={`${KIND_LABEL[k]} brief`} variant={k === suggested ? 'primary' : 'secondary'} busy={busy === k} disabled={busy !== null || generating} onPress={() => void generate(k)} />
+            <View key={k} style={{ flexGrow: 1, flexBasis: wide ? 0 : '45%' }}>
+              <Button label={KIND_LABEL[k]} variant={k === suggested ? 'primary' : 'secondary'} busy={busy === k} disabled={busy !== null || generating} onPress={() => void generate(k)} />
             </View>
           ))}
         </View>
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{`${KIND_LABEL[suggested]} fits the time of day, so it's highlighted.`}</Text>
         <Button label="Refetch tools, then write" variant="secondary" busy={busy === 'refresh'} disabled={busy !== null || generating} onPress={() => void generate(refetchKind, true)} />
         <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 19 }}>
-          OS reads each tool once a day and reuses that data, which keeps API use low. Evening briefs never pull. Refetch is for when something just changed.
+          OS reads each tool once a day and reuses that data, which keeps API use low. Evening and night briefs never pull. Refetch is for when something just changed.
         </Text>
       </View>
 
       {earlier.length ? (
         <View style={{ gap: 4 }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <Head>Earlier briefs</Head>
+            <Head>earlier briefs</Head>
             {!confirmAll ? (
               <Pressable accessibilityRole="button" accessibilityLabel={`Delete all ${earlier.length} earlier briefs`} onPress={() => setConfirmAll(true)} style={{ minHeight: 44, justifyContent: 'center' }}>
-                <Text style={{ color: c.danger, fontFamily: F.sansMedium, fontSize: 14 }}>Delete all</Text>
+                <Text style={{ color: c.danger, fontFamily: F.sansMedium, fontSize: 14 }}>delete all</Text>
               </Pressable>
             ) : null}
           </View>

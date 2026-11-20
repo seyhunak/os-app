@@ -36,18 +36,22 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** Gmail, Outlook, Google Calendar, Calendly, Google Tasks, Google Drive, Notion, Slack, GitHub, GitLab, Jira, Linear, Asana, Trello, Todoist, HubSpot and Hacker News.
 3. **Get a brief.** An AI model ranks each item against your goals and drops the noise. Choose the model in Settings, where cheap models that write well are recommended. Without a key, you get a plain summary of what was read.
-4. **Choose a schedule.** Pick morning, afternoon or evening briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
+4. **Choose a schedule.** Pick morning, afternoon, evening or night briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
 
 ## What a brief looks like
 
-Every brief, morning, afternoon or evening, runs in the same order:
+Every brief opens with a greeting for its kind: good morning, good afternoon, good evening or good night. Then, in this order:
 
-1. **Focus:** the one thing to do first, the goal it moves and what to ignore.
-2. **Signals:** at most 3 things to do, highest priority first, each showing its source and the goal it serves.
-3. **Goals:** where each of your goals stands, and the next action.
-4. **Sources:** a sentence or two on what each tool added up to, never a long list, and anything that failed.
-5. **Left out:** the noise that was dropped and why. It starts collapsed.
-6. **Note for next brief:** what the next brief should pick up first. It's passed on automatically.
+1. **Focus:** the 3 most important things to do, drawn from your goals and your tools, each with its source and the goal it moves.
+2. **Signals:** items scored against your goals, highest first, each with its source. Shown open.
+3. **Noise:** what scored too low to matter, and why. It starts collapsed.
+4. **Goal progress:** the health of each goal (on track, needs attention, at risk or no evidence) and its next action.
+5. **Sources:** a list with a sentence or two on what each tool added up to, and anything that failed.
+
+A second section carries over to the next brief:
+
+- **Note for next brief:** what the next brief should pick up first. It's passed on automatically.
+- **Latest updates:** the last 3 updates in your ledger.
 
 Tap **Update** at the top of the app any time to log what you've done. Updates go into a ledger, which can only be added to. Every brief reads the last 14 days of it, so your signals and goal status reflect work your tools can't see.
 
@@ -123,7 +127,7 @@ iOS and Android don't let an app run a job at an exact time, so a schedule works
 
 - **One read per tool per day.** The first morning brief reads your tools, and later briefs reuse that data. "Refetch" is the only way to read again.
 - **No extra Composio calls.** Your list of connected accounts is also kept for a day, so a fully cached brief or opening Settings calls nothing. A tool that fails is left alone for an hour.
-- **Evening briefs never read.** They use the day's data, so schedule a morning brief as well.
+- **Evening and night briefs never read.** They use the day's data, so schedule a morning brief as well.
 - **A rate limit stops that tool until tomorrow.** OS doesn't retry.
 - **No invented data.** Which tools were read and how each one went comes from code, not from the AI, and a failed or unconnected tool is named in the brief. The model is told to write "insufficient evidence" rather than guess.
 - **Summaries, not lists.** Each source gets a sentence or two from the AI. If it skips one, or there's no model, OS writes a plain one from the data.

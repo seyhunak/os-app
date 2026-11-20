@@ -23,7 +23,7 @@ export type ScheduleInput = Pick<Schedule, 'kind' | 'time' | 'days' | 'timezone'
 export class OsError extends Error {}
 
 const ACCOUNTS_TTL_MS = 86_400_000;
-const KINDS: Kind[] = ['morning', 'afternoon', 'evening'];
+const KINDS: Kind[] = ['morning', 'afternoon', 'evening', 'night'];
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 const validTimezone = (tz: string) => {
@@ -36,7 +36,7 @@ const validTimezone = (tz: string) => {
 };
 
 function checkSchedule(input: ScheduleInput): ScheduleInput {
-  if (!KINDS.includes(input.kind)) throw new OsError('Choose morning, afternoon or evening');
+  if (!KINDS.includes(input.kind)) throw new OsError('Choose morning, afternoon, evening or night');
   if (!TIME.test(input.time)) throw new OsError('Use HH:MM');
   const days = [...new Set(input.days)].filter((d) => Number.isInteger(d) && d >= 0 && d <= 6);
   if (!days.length) throw new OsError('Choose at least one day');

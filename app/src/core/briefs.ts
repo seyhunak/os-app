@@ -1,7 +1,7 @@
 import { toolkitBySlug } from './collectors';
 import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
 import { describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer } from './compose';
-import type { Brief, Kind, SourceReport, Store } from './db';
+import { neverPulls, type Brief, type Kind, type SourceReport, type Store } from './db';
 import { redact, redactDeep } from './redact';
 
 export interface BriefDeps {
@@ -122,7 +122,7 @@ export class BriefService {
   }
 
   /**
-   * The skill's budget: one live pull per toolkit per day, evenings never pull, a 429 stops that toolkit for the day.
+   * The skill's budget: one live pull per toolkit per day, evening and night briefs never pull, a 429 stops that toolkit for the day.
    * An afternoon brief reads like a morning one: today's cache if there is one, a pull if there isn't.
    */
   private async gather(kind: Kind, date: string, now: Date, timeZone: string, refresh: boolean) {
@@ -148,18 +148,18 @@ export class BriefService {
         report('rate_limited');
         continue;
       }
-      const refetching = refresh && kind !== 'evening';
+      const refetching = refresh && !neverPulls(kind);
       if (cached?.status === 'ok' && !refetching) {
         facts[slug] = kept(cached.items);
         report('cache', facts[slug].length, cached.detail);
         continue;
       }
       // A failing tool is left alone for a while, instead of being called again by every brief.
-      if (cached?.status === 'failed' && !refetching && (kind === 'evening' || now.getTime() - Date.parse(cached.fetchedAt!) < FAILURE_RETRY_MS)) {
+      if (cached?.status === 'failed' && !refetching && (neverPulls(kind) || now.getTime() - Date.parse(cached.fetchedAt!) < FAILURE_RETRY_MS)) {
         report('error', 0, cached.detail);
         continue;
       }
-      if (kind === 'evening') {
+      if (neverPulls(kind)) {
         report('no_cache');
         continue;
       }
