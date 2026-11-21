@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Linking } from 'react-native';
 import { COMPOSIO_URL, deviceTimezone, type Api, type Brief, type Status, type Toolkit } from '../api';
+import { BriefProgress, useBriefProgress } from '../BriefProgress';
 import { ToolList } from '../ToolList';
 import { Body, Button, ErrorNote, Field, message, Screen, Title } from '../ui';
 
@@ -57,6 +58,8 @@ export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: St
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hour = useMemo(() => new Date().getHours(), []);
+  const progress = useBriefProgress();
+  const [watching, setWatching] = useState(false);
 
   const generate = async () => {
     setBusy(true);
@@ -65,15 +68,21 @@ export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: St
       if (goals.trim()) await api.saveGoals(goals);
       if (openRouterKey.trim()) await api.saveOpenRouterKey(openRouterKey.trim());
       await api.saveTimezone(deviceTimezone());
-      onDone(await api.generateBrief('morning'));
+      progress.reset();
+      setWatching(true);
+      const brief = await api.generateBrief('morning', false, progress.onProgress);
+      setWatching(false);
+      onDone(brief);
     } catch (e) {
       setError(message(e));
+      setWatching(false);
       setBusy(false);
     }
   };
 
   return (
     <Screen>
+      <BriefProgress visible={watching} title="writing your first brief" steps={progress.steps} error={null} onClose={() => setWatching(false)} />
       <Title step="Step 3 of 3">Your first brief</Title>
       <Field
         label="Paste your goals"

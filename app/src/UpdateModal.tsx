@@ -63,7 +63,7 @@ export function UpdateModal({ api, visible, onClose }: { api: Api; visible: bool
               {saved ? (
                 <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontSize: 14, fontFamily: F.sansMedium }}>Saved to your ledger. Your next brief will use this.</Text>
               ) : (
-                <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>Saved to your ledger. Every brief reads your updates from the last 14 days. Updates can't be edited later.</Text>
+                <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>Saved to your ledger. Your next brief reads it, then carries what matters forward in its note. Updates can't be edited later.</Text>
               )}
               <ErrorNote message={error} />
               <Button label="Save update" busy={busy} disabled={!text.trim()} onPress={() => void save()} />

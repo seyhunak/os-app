@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Pressable, Text, useWindowDimensions, View, type TextStyle } from 'react-native';
 import type { Brief, Kind, LedgerEntry, Source } from '../api';
+import { BriefProgress, useBriefProgress } from '../BriefProgress';
 import { Markdown } from '../Markdown';
 import { SwipeRow } from '../SwipeRow';
 import type { Api } from '../api';
@@ -402,6 +403,8 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
   const auto = useMemo(() => autoBriefFor(api), [api]);
   const [generating, setGenerating] = useState(() => auto.pending() !== null);
   const [ledger, setLedger] = useState<LedgerEntry[] | null>(null);
+  const progress = useBriefProgress();
+  const [watching, setWatching] = useState<{ kind: Kind; error: string | null } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -468,15 +471,20 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
     }
   };
 
+  const closeProgress = useCallback(() => setWatching(null), []);
+
   const generate = async (kind: Kind, refresh = false) => {
     setBusy(refresh ? 'refresh' : kind);
     setError(null);
+    progress.reset();
+    setWatching({ kind, error: null });
     try {
-      const brief = await api.generateBrief(kind, refresh);
+      const brief = await api.generateBrief(kind, refresh, progress.onProgress);
       setBriefs((list) => [brief, ...(list ?? [])]);
       setOpenId(brief.id);
     } catch (e) {
       setError(message(e));
+      setWatching((w) => (w ? { ...w, error: message(e) } : w));
       reloadQuietly();
     } finally {
       setBusy(null);
@@ -497,6 +505,13 @@ export function TodayScreen({ api, hasSchedules, onSchedule }: { api: Api; hasSc
 
   return (
     <Screen maxWidth={PAGE_WIDTH}>
+      <BriefProgress
+        visible={watching !== null}
+        title={watching ? `writing your ${KIND_LABEL[watching.kind].toLowerCase()} brief` : ''}
+        steps={progress.steps}
+        error={watching?.error ?? null}
+        onClose={closeProgress}
+      />
       {stale && latest ? <StaleNote brief={latest} generating={generating} /> : null}
       {current ? <FrontPage brief={current} wide={wide} ledger={ledger} /> : <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 18 }}>No briefs yet. Write your first one below.</Text>}
 

@@ -1,6 +1,6 @@
 import { toolkitBySlug } from './collectors';
 import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
-import { describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer } from './compose';
+import { compactNote, describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer, type OnProgress } from './compose';
 import { neverPulls, type Brief, type Kind, type SourceReport, type Store } from './db';
 import { redact, redactDeep } from './redact';
 
@@ -17,17 +17,28 @@ export interface GenerateOptions {
   trigger: Brief['trigger'];
   timezone?: string;
   refresh?: boolean;
+  /** Told each step as it happens, in plain words, for the progress view. */
+  onProgress?: OnProgress;
 }
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 export function localDate(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(date);
 }
 
 /** How far back and how many of the user's updates each brief reads. */
-const LEDGER_DAYS = 14;
-const LEDGER_ENTRIES = 50;
+/**
+ * Updates the last AI brief already read are carried by its note, so only newer ones are sent.
+ * With no AI brief yet, the last day's. At most this many, each cut to this length, to keep the prompt small.
+ */
+const UPDATES_SENT = 10;
+const UPDATE_CHARS = 280;
+const FIRST_UPDATES_MS = 86_400_000;
 /** How long to wait before calling a failing tool again. Refetch skips the wait. */
 const FAILURE_RETRY_MS = 3_600_000;
+
+type ProgressStateOf = Parameters<OnProgress>[0]['state'];
 
 export const selectedToolkits = (store: Store): string[] => JSON.parse(store.getSetting('selected_toolkits') ?? '[]');
 
@@ -66,14 +77,35 @@ export class BriefService {
     return localDate(new Date(latest.createdAt), zone) === localDate(now, zone) ? latest : null;
   }
 
-  private async run({ kind, trigger, timezone, refresh }: GenerateOptions): Promise<Brief> {
+  private async run({ kind, trigger, timezone, refresh, onProgress }: GenerateOptions): Promise<Brief> {
     const { store } = this.deps;
+    const progress: OnProgress = (step) => {
+      try {
+        onProgress?.(step);
+      } catch {
+        // The progress view is a nicety; it never stops a brief.
+      }
+    };
     const now = this.deps.now?.() ?? new Date();
     const zone = timezone ?? store.getSetting('timezone') ?? 'UTC';
     const date = localDate(now, zone);
     store.pruneCache(now);
 
-    const { facts, sources } = await this.gather(kind, date, now, zone, Boolean(refresh));
+    progress({ key: 'goals', text: 'Reading your goals and recent updates', state: 'running' });
+    const goals = store.getSetting('goals') ?? '';
+    // A digest never read the updates, so the window starts at the last brief an AI wrote.
+    const lastRanked = store.listBriefs(30).find((b) => b.generator === 'ai');
+    const updates = store.listLedger(UPDATES_SENT, lastRanked?.createdAt ?? new Date(now.getTime() - FIRST_UPDATES_MS).toISOString()).reverse();
+    const objectives = goals.split('\n').filter((l) => /^\s*O\s*\d*\s*:/i.test(l)).length;
+    progress({
+      key: 'goals',
+      text: goals.trim() ? `Read ${objectives ? plural(objectives, 'goal') : 'your goals'} and ${plural(updates.length, 'update')} ${lastRanked ? 'logged since your last brief' : 'from the last day'}` : 'No goals set yet, so nothing can be ranked against them. Add some in Settings',
+      state: goals.trim() ? 'done' : 'warn',
+    });
+    const previousNote = compactNote(extractNote(store.latestBrief()?.markdown));
+    if (previousNote) progress({ key: 'note', text: 'Picking up the note your last brief left', state: 'done' });
+
+    const { facts, sources } = await this.gather(kind, date, now, zone, Boolean(refresh), progress);
     for (const source of sources) {
       source.label = STATUS_LABEL[source.status];
       const items = (facts[source.toolkit] ?? []) as Array<Record<string, unknown>>;
@@ -84,11 +116,11 @@ export class BriefService {
       kind,
       date,
       timezone: zone,
-      goals: store.getSetting('goals') ?? '',
-      previousNote: extractNote(store.latestBrief()?.markdown),
-      updates: store.listLedger(LEDGER_ENTRIES, new Date(now.getTime() - LEDGER_DAYS * 86_400_000).toISOString()).reverse().map((entry) => ({
-        at: new Intl.DateTimeFormat('en-GB', { timeZone: zone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(entry.createdAt)),
-        text: entry.text,
+      goals,
+      previousNote,
+      updates: updates.map((entry) => ({
+        at: new Intl.DateTimeFormat('en-GB', { timeZone: zone, day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(entry.createdAt)),
+        text: entry.text.length > UPDATE_CHARS ? `${entry.text.slice(0, UPDATE_CHARS)}…` : entry.text,
       })),
       facts,
       sources,
@@ -97,16 +129,21 @@ export class BriefService {
     let body: string;
     let generator: Brief['generator'] = 'digest';
     const composer = this.deps.composer();
+    const read = sources.reduce((n, s) => n + (facts[s.toolkit]?.length ?? 0), 0);
     if (composer) {
+      progress({ key: 'weigh', text: `Handing ${plural(read, 'item')} and your goals to the AI, with secrets already stripped out`, state: 'done' });
       try {
-        body = await composer(input);
+        body = await composer(input, progress);
         generator = 'ai';
       } catch (error) {
+        progress({ key: 'digest', text: `Couldn't rank: ${describeComposeError(error)}. Writing an unranked digest instead`, state: 'warn' });
         body = renderDigest(input, `${describeComposeError(error)}, so this brief was not ranked`);
       }
     } else {
+      progress({ key: 'digest', text: 'No OpenRouter key, so writing an unranked digest of what was read', state: 'skip' });
       body = renderDigest(input, 'no OpenRouter key is set');
     }
+    progress({ key: 'finish', text: 'Removing secrets and laying out the brief', state: 'running' });
 
     const { body: rest, summaries } = extractSourceSummaries(body);
     for (const source of sources) {
@@ -118,19 +155,22 @@ export class BriefService {
 
     const table = renderSources(sources);
     const markdown = redact(body.includes(SOURCES_MARKER) ? body.replace(SOURCES_MARKER, () => table) : `${body}\n\n### Sources\n${table}`);
-    return store.addBrief({ kind, trigger, generator, markdown, sources }, now);
+    const brief = store.addBrief({ kind, trigger, generator, markdown, sources }, now);
+    progress({ key: 'finish', text: 'Brief ready', state: 'done' });
+    return brief;
   }
 
   /**
    * The skill's budget: one live pull per toolkit per day, evening and night briefs never pull, a 429 stops that toolkit for the day.
    * An afternoon brief reads like a morning one: today's cache if there is one, a pull if there isn't.
    */
-  private async gather(kind: Kind, date: string, now: Date, timeZone: string, refresh: boolean) {
+  private async gather(kind: Kind, date: string, now: Date, timeZone: string, refresh: boolean, progress: OnProgress) {
     const { store } = this.deps;
     const gateway = this.deps.gateway();
     const facts: Record<string, unknown[]> = {};
     const sources: SourceReport[] = [];
     const slugs = selectedToolkits(store);
+    if (!slugs.length) progress({ key: 'tools', text: 'No tools selected, so there is nothing to scan', state: 'skip' });
 
     // Asked for only when a tool really needs reading, so a fully cached brief makes no Composio calls at all.
     let accountList: ReturnType<BriefDeps['accounts']> | null = null;
@@ -139,8 +179,22 @@ export class BriefService {
     for (const slug of slugs) {
       const toolkit = toolkitBySlug(slug);
       if (!toolkit) continue;
-      const report = (status: SourceReport['status'], items = 0, detail?: string) =>
-        sources.push({ toolkit: slug, name: toolkit.name, status, items, ...(detail ? { detail } : {}) });
+      const key = `tool:${slug}`;
+      const name = toolkit.name;
+      const report = (status: SourceReport['status'], items = 0, detail?: string) => {
+        sources.push({ toolkit: slug, name, status, items, ...(detail ? { detail } : {}) });
+        const found = items ? plural(items, 'item') : 'nothing new';
+        const step: Record<SourceReport['status'], [string, ProgressStateOf]> = {
+          live: [`Scanned ${name}: ${found} pulled fresh`, 'done'],
+          cache: [`${name}: reusing today's copy, ${found}`, 'done'],
+          rate_limited: [`${name} is rate limited today, so it was skipped${items ? ` after ${found}` : ''}`, 'warn'],
+          error: [`${name} couldn't be read${detail ? `: ${detail}` : ''}`, 'warn'],
+          not_connected: [`${name} isn't connected${detail ? ` (${detail})` : ''}`, 'skip'],
+          no_cache: [`${name}: ${kind} briefs don't pull, and there's no copy from today`, 'skip'],
+        };
+        progress({ key, text: step[status][0], state: step[status][1] });
+      };
+      progress({ key, text: `Scanning ${name}…`, state: 'running' });
       const kept = (items: unknown[]) => toolkit.keep?.(items, now, timeZone) ?? items;
 
       const cached = store.getPull(date, slug);
