@@ -64,7 +64,7 @@ What each kind is for:
 
 Older briefs, written before this layout, still open. They show the sections they have.
 
-Tap **Update** at the top of the app any time to log what you've done. Updates go into a ledger, which can only be added to. Every brief reads the last 14 days of it, so your signals and goal status reflect work your tools can't see.
+Tap **Update** at the top of the app any time to log what you've done. Updates go into a ledger, which can only be added to. Each brief reads only the updates logged since the last AI-written brief (at most 10), and carries what still matters forward in its short "Note for Next Brief", so your signals and goal status reflect work your tools can't see without resending old updates.
 
 ## The Today screen
 

@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
 import { composioState, modelState } from '../settingsSummary';
 import { COMPOSIO_URL, type Api, type ModelOption, type Status } from '../api';
+import { GoalModal } from '../GoalModal';
 import { useRefresh } from '../refresh';
 import { ToolList } from '../ToolList';
-import { Button, Card, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
+import { Button, Card, display, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
 
 const DOTS = '••••••••••••';
 
@@ -217,46 +218,75 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
   );
 }
 
-const goalLines = (goals: string) => goals.split('\n').map((g) => g.trim()).filter(Boolean);
+const isOkr = (goal: string) => /^O\s*\d*\s*:/i.test(goal.trim());
+/** A goal's first line without its "O:" label, for the collapsed list. */
+const objectiveOf = (goal: string) => goal.trim().split('\n')[0]!.replace(/^O\s*\d*\s*:\s*/i, '');
 
-/** Collapsed to a short summary, because goals can be long once pasted. Empty goals start open. */
-function GoalsSection({ api }: { api: Api }) {
+/**
+ * Up to five goals, one OKR each, in its own box. The AI writes each one from your notes, and you
+ * can edit it after. Collapsed, it shows only the objectives. Empty goals start open.
+ */
+function GoalsSection({ api, hasAiKey }: { api: Api; hasAiKey: boolean }) {
   const c = useColors();
-  const [goals, setGoals] = useState<string | null>(null);
+  const [saved, setSaved] = useState<string[] | null>(null);
+  const [drafts, setDrafts] = useState<string[]>([]);
+  const [max, setMax] = useState(5);
   const [expanded, setExpanded] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [adding, setAdding] = useState(false);
+  /** Goals opened in the collapsed summary, to read in full. */
+  const [opened, setOpened] = useState<number[]>([]);
+  const [busy, setBusy] = useState<'save' | number | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const { refreshKey } = useRefresh();
+  const dirty = saved !== null && JSON.stringify(drafts) !== JSON.stringify(saved);
   const editing = useRef(false);
-  editing.current = expanded;
+  editing.current = dirty;
+
+  const apply = (goals: string[], limit = max) => {
+    setOpened([]);
+    setSaved(goals);
+    setDrafts(goals);
+    setMax(limit);
+  };
+
   useEffect(() => {
     // A reload never replaces goals you're in the middle of editing.
-    if (goals !== null && editing.current) return;
-    api.goals().then((r) => {
-      setGoals(r.goals);
-      setExpanded(!r.goals.trim());
+    if (editing.current) return;
+    api.goalList().then((r) => {
+      apply(r.goals, r.max);
+      if (!r.goals.length) setExpanded(true);
     }).catch((e) => setError(message(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, refreshKey]);
 
-  const save = async () => {
-    setBusy(true);
+  const run = async (which: 'save' | number, work: () => Promise<{ goals: string[]; max: number }>, done: string) => {
+    setBusy(which);
     setError(null);
+    setNote(null);
     try {
-      await api.saveGoals(goals ?? '');
-      setSaved(true);
-      if ((goals ?? '').trim()) setExpanded(false);
+      const r = await work();
+      apply(r.goals, r.max);
+      setNote(done);
     } catch (e) {
       setError(message(e));
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
-  const lines = goalLines(goals ?? '');
-  const summary = lines.length === 0 ? 'None yet' : lines.length === 1 ? '1 goal' : `${lines.length} goals`;
+  const save = () => run('save', () => api.saveGoalList(drafts), 'Goals saved. Your next brief ranks against them.');
+  const remove = (i: number) => run(i, () => api.saveGoalList(drafts.filter((_, j) => j !== i)), 'Goal removed.');
+  // Unsaved edits are saved first, so the rewrite works from what you see.
+  const rewrite = (i: number) => run(i, async () => {
+    if (dirty) await api.saveGoalList(drafts);
+    return api.rewriteGoal(i);
+  }, 'Rewritten as OKRs. Edit anything that reads wrong.');
+
+  const count = saved?.length ?? 0;
+  const full = count >= max;
+  const summary = count ? `${count} of ${max}` : 'None yet';
 
   return (
     <View style={{ gap: 10 }}>
@@ -267,35 +297,82 @@ function GoalsSection({ api }: { api: Api }) {
         onPress={() => setExpanded((e) => !e)}
         style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
       >
-        <Text accessibilityRole="header" style={{ color: c.text, fontFamily: F.display, fontSize: 24, lineHeight: 30 }}>Goals</Text>
+        <Text accessibilityRole="header" style={{ color: c.text, ...display, fontSize: 30, lineHeight: 32 }}>Goals</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-          <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14 }}>{summary}</Text>
-          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 14 }}>{expanded ? 'Collapse' : 'Expand'}</Text>
+          <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 13 }}>{summary}</Text>
+          <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 14 }}>{expanded ? 'collapse' : 'expand'}</Text>
         </View>
       </Pressable>
+
+      <Button label={full ? `${max} goals, the most OS keeps` : 'Write a goal with AI'} variant={count ? 'secondary' : 'primary'} disabled={full || !hasAiKey || saved === null} onPress={() => setAdding(true)} />
+      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
+        {!hasAiKey ? 'Add your OpenRouter key under Model to write goals with AI.'
+          : full ? 'Remove a goal to add another. Fewer goals make sharper briefs.'
+          : `Each goal becomes an OKR: one objective and up to 3 key results. Up to ${max} goals.`}
+      </Text>
       <ErrorNote message={error} />
-      {expanded && goals !== null ? (
-        <>
+      {note && !dirty ? <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontFamily: F.sansMedium, fontSize: 14 }}>{note}</Text> : null}
+
+      {expanded ? drafts.map((goal, i) => (
+        <Card key={i}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+            <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 13 }}>{`goal ${String(i + 1).padStart(2, '0')}`}</Text>
+            <View style={{ flexDirection: 'row', gap: 16 }}>
+              {!isOkr(goal) && hasAiKey ? (
+                <Pressable accessibilityRole="button" accessibilityLabel={`Rewrite goal ${i + 1} as OKR`} disabled={busy !== null} onPress={() => void rewrite(i)} style={{ minHeight: 44, justifyContent: 'center' }}>
+                  <Text style={{ color: c.accent, fontFamily: F.sansMedium, fontSize: 14 }}>{busy === i ? 'rewriting…' : 'rewrite as OKR'}</Text>
+                </Pressable>
+              ) : null}
+              <Pressable accessibilityRole="button" accessibilityLabel={`Remove goal ${i + 1}`} disabled={busy !== null} onPress={() => void remove(i)} style={{ minHeight: 44, justifyContent: 'center' }}>
+                <Text style={{ color: c.danger, fontFamily: F.sansMedium, fontSize: 14 }}>remove</Text>
+              </Pressable>
+            </View>
+          </View>
           <Field
-            label="Paste your goals"
-            placeholder={'Paste them here, one per line. For example:\nLand 3 paying customers by March\nShip the beta by December 15'}
-            value={goals}
-            onChangeText={(t) => { setGoals(t); setSaved(false); }}
+            label={isOkr(goal) ? 'Objective and key results' : 'Notes, not yet an OKR'}
+            value={goal}
+            onChangeText={(t) => setDrafts((list) => list.map((g, j) => (j === i ? t : g)))}
             multiline
             autoCapitalize="sentences"
             autoCorrect
-            hint="A list or notes both work. Your brief ranks everything against your goals."
+            editable={busy === null}
           />
-          <Button label="Save goals" busy={busy} onPress={() => void save()} />
-        </>
-      ) : null}
-      {!expanded && lines.length ? (
-        <View style={{ gap: 4 }}>
-          {saved ? <Text accessibilityLiveRegion="polite" style={{ color: c.accent, fontFamily: F.sansMedium, fontSize: 14 }}>Goals saved.</Text> : null}
-          {lines.slice(0, 3).map((line, i) => <Text key={i} numberOfLines={1} style={{ color: c.text, fontFamily: F.text, fontSize: 17, lineHeight: 25 }}>{line}</Text>)}
-          {lines.length > 3 ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13 }}>and {lines.length - 3} more</Text> : null}
+        </Card>
+      )) : null}
+      {expanded && dirty ? <Button label="Save goals" busy={busy === 'save'} disabled={busy !== null} onPress={() => void save()} /> : null}
+
+      {!expanded && count ? (
+        <View style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
+          {saved!.map((goal, i) => {
+            const open = opened.includes(i);
+            const results = goal.trim().split('\n').slice(1);
+            return (
+              <Pressable
+                key={i}
+                accessibilityRole="button"
+                accessibilityLabel={`Goal ${i + 1}: ${objectiveOf(goal)}`}
+                accessibilityHint={open ? 'Shows less' : 'Shows the full goal'}
+                accessibilityState={{ expanded: open }}
+                onPress={() => setOpened((list) => (open ? list.filter((j) => j !== i) : [...list, i]))}
+                style={{ minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, gap: 6, borderTopWidth: i ? 1 : 0, borderColor: c.line }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+                  <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 13, lineHeight: 24 }}>{String(i + 1).padStart(2, '0')}</Text>
+                  <Text numberOfLines={open ? undefined : 1} style={{ flex: 1, color: c.text, fontFamily: open ? F.sansMedium : F.text, fontSize: 16, lineHeight: 24 }}>{objectiveOf(goal)}</Text>
+                  <Text style={{ color: c.muted, fontFamily: F.sansMedium, fontSize: 13, lineHeight: 24 }}>{open ? 'less' : 'more'}</Text>
+                </View>
+                {open && results.length ? (
+                  <View style={{ gap: 4, paddingLeft: 28 }}>
+                    {results.map((line, j) => <Text key={j} style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>{line.trim()}</Text>)}
+                  </View>
+                ) : null}
+              </Pressable>
+            );
+          })}
         </View>
       ) : null}
+
+      <GoalModal api={api} visible={adding} onClose={() => setAdding(false)} onAdded={(goals) => { apply(goals); setExpanded(true); setNote('Goal added. Edit the OKR if anything reads wrong.'); }} />
     </View>
   );
 }
@@ -307,7 +384,7 @@ export function SettingsScreen({ api, status, onChanged }: { api: Api; status: S
   return (
     <Screen>
       <Title>Settings</Title>
-      <GoalsSection api={api} />
+      <GoalsSection api={api} hasAiKey={Boolean(status.openrouter)} />
       <Section title="Tools"><ToolList api={api} /></Section>
       <Section title="Keys" collapsed={keys.configured} summary={keys.summary}>
         <KeyRow name="Composio" label="Composio API key" state={status.composio} hint={status.composioHint} getKeyUrl={COMPOSIO_URL} onSave={(k) => api.saveComposioKey(k).then(onChanged)} onRemove={() => api.removeCredential('composio').then(onChanged)} />

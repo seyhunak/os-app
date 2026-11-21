@@ -1,7 +1,7 @@
 import { BriefService, selectedToolkits } from './briefs';
 import { TOOLKITS, toolkitBySlug } from './collectors';
 import type { ComposioGateway, ConnectedAccount } from './composio';
-import { createComposer, DEFAULT_MODEL, listOpenRouterModels, pickFree, type AiConfig, type Composer, type ModelOption } from './compose';
+import { createComposer, DEFAULT_MODEL, describeComposeError, draftOkrs, listOpenRouterModels, MAX_GOALS, pickFree, type AiConfig, type Composer, type ModelOption, type OnProgress } from './compose';
 import type { Brief, Kind, Schedule, Store } from './db';
 import { redact } from './redact';
 import { dueSchedule, nextRun } from './schedule';
@@ -12,6 +12,8 @@ export interface OsDeps {
   createComposer?(config: AiConfig): Composer;
   verifyOpenRouterKey?(apiKey: string): Promise<void>;
   listModels?(apiKey: string): Promise<ModelOption[]>;
+  /** Writes OKRs from notes. Defaults to OpenRouter. */
+  draftOkrs?(config: AiConfig, notes: string, max: number): Promise<string[]>;
   /** Told whenever schedules change, so the phone can set its reminders again. */
   onSchedulesChanged?(schedules: Schedule[]): void;
   now?(): Date;
@@ -21,6 +23,15 @@ export type ScheduleInput = Pick<Schedule, 'kind' | 'time' | 'days' | 'timezone'
 
 /** A problem to show as is. Everything else is reported with a general message. */
 export class OsError extends Error {}
+
+/** One goal's longest text. An OKR is a few short lines; longer pasted notes get rewritten first. */
+const GOAL_LENGTH = 2000;
+
+/** One OKR, tidied: no trailing spaces, no blank lines inside it. */
+const tidyGoal = (goal: string) => goal.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+
+/** What a brief reads: each goal on its own lines, nothing else, to keep the prompt small. */
+export const goalsForBrief = (goals: string[]) => goals.map(tidyGoal).filter(Boolean).join('\n');
 
 const ACCOUNTS_TTL_MS = 86_400_000;
 const KINDS: Kind[] = ['morning', 'afternoon', 'evening', 'night'];
@@ -84,6 +95,29 @@ export function createOs(deps: OsDeps) {
   const saveModels = (models: ModelOption[]) => {
     store.setSetting('recommended_models', JSON.stringify(models.filter((m) => m.recommended).map(({ id, price }) => ({ id, price }))));
     store.setSetting('free_models', JSON.stringify(pickFree(models.map((m) => m.id))));
+  };
+  const goalList = (): string[] => {
+    const saved = store.getSetting('goals_list');
+    if (saved) return JSON.parse(saved) as string[];
+    // Goals from before the list were one block of text, which stays one goal until it's rewritten.
+    const legacy = store.getSetting('goals')?.trim();
+    return legacy ? [legacy] : [];
+  };
+  const writeGoals = (list: string[]) => {
+    store.setSetting('goals_list', JSON.stringify(list));
+    store.setSetting('goals', goalsForBrief(list));
+  };
+  const okrs = async (notes: string, max: number): Promise<string[]> => {
+    const text = notes.trim();
+    if (!text) throw new OsError('Write a goal first');
+    if (text.length > 20_000) throw new OsError('Keep it under 20,000 characters');
+    const config = aiConfig();
+    if (!config) throw new OsError('Add your OpenRouter key in Settings, under Model, to write OKRs');
+    try {
+      return (await (deps.draftOkrs ?? draftOkrs)(config, text, max)).slice(0, max);
+    } catch (error) {
+      throw new OsError(`Couldn't write the OKR: ${describeComposeError(error)}.`);
+    }
   };
   const lastFour = (key: string | null) => (key ? key.slice(-4) : null);
 
@@ -220,10 +254,41 @@ export function createOs(deps: OsDeps) {
     async goals() {
       return { goals: store.getSetting('goals') ?? '' };
     },
+    /** Pasted notes, such as from onboarding. They become one goal, which Settings can rewrite as OKRs. */
     async saveGoals(goals: string) {
       if (goals.length > 20_000) throw new OsError('Keep your goals under 20,000 characters');
+      store.setSetting('goals_list', JSON.stringify(goals.trim() ? [goals.trim()] : []));
       store.setSetting('goals', goals);
       return { goals };
+    },
+
+    /** Your goals, one OKR each, at most five. */
+    async goalList() {
+      return { goals: goalList(), max: MAX_GOALS };
+    },
+    async saveGoalList(goals: string[]) {
+      const list = goals.map(tidyGoal).filter(Boolean);
+      if (list.length > MAX_GOALS) throw new OsError(`Keep it to ${MAX_GOALS} goals, so each one gets attention`);
+      if (list.some((g) => g.length > GOAL_LENGTH)) throw new OsError('A goal is too long. Shorten it, or rewrite it as an OKR');
+      writeGoals(list);
+      return { goals: list, max: MAX_GOALS };
+    },
+    /** Writes one OKR from what you typed and adds it to your goals. */
+    async addGoal(notes: string) {
+      const list = goalList();
+      if (list.length >= MAX_GOALS) throw new OsError(`You have ${MAX_GOALS} goals, the most OS keeps. Remove one to add another`);
+      const [okr] = await okrs(notes, 1);
+      writeGoals([...list, okr!]);
+      return { goals: goalList(), max: MAX_GOALS };
+    },
+    /** Rewrites one goal as OKRs. Long pasted notes can become several, up to the free slots. */
+    async rewriteGoal(index: number) {
+      const list = goalList();
+      const goal = list[index];
+      if (goal === undefined) throw new OsError('Goal not found');
+      const written = await okrs(goal, MAX_GOALS - list.length + 1);
+      writeGoals([...list.slice(0, index), ...written, ...list.slice(index + 1)]);
+      return { goals: goalList(), max: MAX_GOALS };
     },
 
     async saveTimezone(timezone: string) {
@@ -248,8 +313,8 @@ export function createOs(deps: OsDeps) {
     async archiveBriefs(ids: number[]) {
       return { archived: store.archiveBriefs(ids, now()) };
     },
-    generateBrief(kind: Kind, refresh = false): Promise<Brief> {
-      return briefs.generate({ kind, trigger: 'manual', refresh });
+    generateBrief(kind: Kind, refresh = false, onProgress?: OnProgress): Promise<Brief> {
+      return briefs.generate({ kind, trigger: 'manual', refresh, ...(onProgress ? { onProgress } : {}) });
     },
     /** Writes today's first brief, unless one from today already exists, in which case that one comes back. */
     async generateTodayBrief(kind: Kind): Promise<Brief> {

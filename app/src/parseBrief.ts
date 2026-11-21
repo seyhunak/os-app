@@ -162,6 +162,12 @@ export function parseGoal(line: string): Goal {
   };
 }
 
+/** Inbox chores, like "Check recruiter replies": reading about work rather than doing it. */
+const TRIAGE = /^(?:check|review|read|scan|monitor|look (?:at|through|over)|go through|skim|keep an eye on|stay on top of)\b.*\b(?:inbox|repl(?:y|ies)|e-?mails?|messages?|notifications?|dms?|threads?|mentions?)\b/i;
+
+/** Focus is for work that moves a goal, so unaligned items and inbox chores never make it. */
+export const isRealWork = (item: Priority) => !item.unaligned && !TRIAGE.test(item.headline);
+
 export function parseBrief(markdown: string, knownSources: string[] = []): ParsedBrief {
   const sections = sectionsOf(markdown);
   // Older briefs called this section "Today's Priorities" and kept the noise inside it.
@@ -169,7 +175,7 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
   const goalsRaw = sections.get('goal progress') ?? sections.get('goals');
   const greeting = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() ?? null;
   const focusRaw = sections.get('focus') ?? '';
-  const focusItems = bullets(focusRaw).map((line) => parsePriority(line, [...knownSources, 'Goals']));
+  const focusItems = bullets(focusRaw).map((line) => parsePriority(line, [...knownSources, 'Goals'])).filter(isRealWork);
   const notice = markdown.split('\n').find((l) => l.trim().startsWith('>'))?.replace(/^\s*>\s*/, '').trim() ?? null;
   const empty: ParsedBrief = { structured: false, notice, greeting, focusItems: [], focus: null, priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
   if (prioritiesRaw === undefined) return empty;

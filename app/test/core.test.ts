@@ -737,7 +737,32 @@ describe('ledger', () => {
     });
   }
 
-  it('leaves out updates older than 14 days', async () => {
+  it('sends only updates since the last AI brief, at most 10, each cut short', async () => {
+    let now = NOW;
+    let seen: BriefInput | undefined;
+    let ai = true;
+    const { os } = await connected({ clock: () => now, composer: async (input) => { seen = input; if (!ai) throw new Error('down'); return '# Hi'; } });
+    await os.addUpdate('Before');
+    now = new Date(NOW.getTime() + 60_000);
+    await os.generateBrief('evening');
+    assert.deepEqual(seen!.updates.map((u) => u.text), ['Before']);
+    // A digest never read the updates, so they're sent again until an AI reads them.
+    now = new Date(NOW.getTime() + 120_000);
+    await os.addUpdate('After');
+    ai = false;
+    now = new Date(NOW.getTime() + 180_000);
+    await os.generateBrief('evening');
+    ai = true;
+    now = new Date(NOW.getTime() + 240_000);
+    for (let i = 0; i < 11; i++) await os.addUpdate(i === 10 ? 'x'.repeat(400) : `u${i}`);
+    now = new Date(NOW.getTime() + 300_000);
+    await os.generateBrief('evening');
+    assert.equal(seen!.updates.length, 10);
+    assert.ok(!seen!.updates.some((u) => u.text === 'Before'));
+    assert.equal(seen!.updates.at(-1)!.text.length, 281);
+  });
+
+  it('leaves out updates older than a day before the first AI brief', async () => {
     let seen: BriefInput | undefined;
     const { os, store } = await connected({ composer: async (input) => { seen = input; return '# Hi'; } });
     store.addLedgerEntry('Ancient', '2026-01-01T00:00:00.000Z');
