@@ -12,6 +12,21 @@ export interface Priority {
   action: string | null;
   score: number | null;
   level: Level;
+  /** The day-plan slot it sits in, such as "09:00–10:30". */
+  when: string | null;
+}
+
+export type Energy = 'high' | 'medium' | 'low' | 'fixed' | null;
+
+/** One block of the day plan: a time slot, the energy it needs, and what gets done in it. */
+export interface PlanBlock {
+  start: string;
+  end: string | null;
+  energy: Energy;
+  task: string;
+  /** Why this slot suits the task. */
+  why: string | null;
+  goal: string | null;
 }
 
 export interface NoiseItem {
@@ -40,6 +55,8 @@ export interface ParsedBrief {
   focusItems: Priority[];
   /** Older briefs wrote focus as a sentence or two instead of a list. */
   focus: string | null;
+  /** The day, time-blocked by the energy each task needs. Empty for older briefs. */
+  plan: PlanBlock[];
   priorities: Priority[];
   /** Used when the priorities section isn't a ranked list, such as an unranked digest. */
   prioritiesText: string | null;
@@ -85,6 +102,8 @@ function sectionsOf(markdown: string): Map<string, string> {
 
 export function parsePriority(line: string, knownSources: string[] = []): Priority {
   let text = clean(line);
+  const whenMatch = text.match(/\|?\s*When:\s*([^|]+)/i);
+  if (whenMatch) text = text.replace(whenMatch[0], ' ').trim();
   const goalMatch = text.match(/\|?\s*\[?Goal:\s*([^|\]→]+)\]?/i);
   if (goalMatch) text = text.replace(goalMatch[0], ' ').trim();
   const named = goalMatch?.[1]?.trim() ?? null;
@@ -118,6 +137,41 @@ export function parsePriority(line: string, knownSources: string[] = []): Priori
     action: rest.join(' ').replace(/^[\s|]+|[\s|]+$/g, '') || null,
     score: score ? Number(score[1]) : null,
     level,
+    when: whenMatch?.[1]?.trim().replace(/\s*[-–—]\s*/, '–') || null,
+  };
+}
+
+const TIME = String.raw`\d{1,2}[:.]\d{2}`;
+const SLOT = new RegExp(String.raw`^(${TIME})(?:\s*[-–—]\s*(${TIME}))?\s*`);
+const ENERGY: Array<[RegExp, Exclude<Energy, null>]> = [
+  [/^(?:🔋\s*)?high(?: energy)?$/i, 'high'],
+  [/^(?:🔆\s*)?(?:medium|mid)(?: energy)?$/i, 'medium'],
+  [/^(?:🪫\s*)?low(?: energy)?$/i, 'low'],
+  [/^(?:📌\s*)?(?:fixed|calendar|meeting)$/i, 'fixed'],
+];
+const hhmm = (t: string) => t.replace('.', ':').padStart(5, '0');
+
+/** Reads "09:00–10:30 | High | German: Lesson 12 → morning focus | Goal: Pass B1". Null if the line has no time. */
+export function parsePlanBlock(line: string): PlanBlock | null {
+  let text = clean(line);
+  const slot = text.match(SLOT);
+  if (!slot) return null;
+  text = text.slice(slot[0].length).replace(/^[|·:,-]\s*/, '');
+  const goalMatch = text.match(/\|?\s*\[?Goal:\s*([^|\]]+)\]?/i);
+  if (goalMatch) text = text.replace(goalMatch[0], ' ').trim();
+  const parts = text.split('|').map((p) => p.trim()).filter(Boolean);
+  const energyAt = parts.findIndex((p) => ENERGY.some(([re]) => re.test(p)));
+  const energy = energyAt >= 0 ? ENERGY.find(([re]) => re.test(parts[energyAt]!))![1] : null;
+  const rest = parts.filter((_, i) => i !== energyAt).join(' | ');
+  const [task, ...why] = rest.split(ARROW);
+  const goal = goalMatch?.[1]?.trim() ?? null;
+  return {
+    start: hhmm(slot[1]!),
+    end: slot[2] ? hhmm(slot[2]) : null,
+    energy,
+    task: task!.replace(/^[\s|]+|[\s|]+$/g, ''),
+    why: why.join(' ').replace(/^[\s|]+|[\s|]+$/g, '') || null,
+    goal: goal && !/UNALIGNED|^none$|^n\/a$/i.test(goal) ? goal : null,
   };
 }
 
@@ -177,7 +231,8 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
   const focusRaw = sections.get('focus') ?? '';
   const focusItems = bullets(focusRaw).map((line) => parsePriority(line, [...knownSources, 'Goals'])).filter(isRealWork);
   const notice = markdown.split('\n').find((l) => l.trim().startsWith('>'))?.replace(/^\s*>\s*/, '').trim() ?? null;
-  const empty: ParsedBrief = { structured: false, notice, greeting, focusItems: [], focus: null, priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
+  const plan = bullets(sections.get('day plan') ?? '').map(parsePlanBlock).filter((b): b is PlanBlock => b !== null && Boolean(b.task));
+  const empty: ParsedBrief = { structured: false, notice, greeting, focusItems: [], focus: null, plan: [], priorities: [], prioritiesText: null, noise: [], goals: [], goalsText: null, sources: null, note: null };
   if (prioritiesRaw === undefined) return empty;
 
   const noiseAt = prioritiesRaw.search(/^\s*\*{0,2}\s*Noise eliminated/im);
@@ -199,6 +254,7 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
     greeting,
     focusItems,
     focus: focusItems.length ? null : clean(focusRaw) || null,
+    plan,
     priorities: ranked ? priorities : [],
     prioritiesText: ranked ? null : signalsPart.trim() || null,
     // The model sometimes repeats a signal here, so anything already a signal is dropped.

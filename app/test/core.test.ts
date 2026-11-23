@@ -561,6 +561,11 @@ describe('brief composition', () => {
     assert.equal(brief.sources[0]!.summary, 'Last email, 1 unread. Latest: Contract due Friday from pat@example.com.');
   });
 
+  it('tells the model the local weekday and time, so the day plan starts from now', () => {
+    const prompt = renderUserPrompt({ kind: 'afternoon', date: '2026-11-23', weekday: 'Monday', time: '14:05', timezone: 'Europe/Berlin', goals: '', previousNote: null, updates: [], sources: [], facts: {} });
+    assert.match(prompt, /^Today is Monday, 2026-11-23, and it is 14:05 in Europe\/Berlin\. Write the afternoon brief\./);
+  });
+
   it("doesn't let source data close its tag", () => {
     const prompt = renderUserPrompt({
       kind: 'morning', date: '2026-11-06', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [],
@@ -638,7 +643,7 @@ describe('OpenRouter', () => {
     const fetchMock = reply({ choices: [{ finish_reason: 'stop', message: { content: '<think>hmm</think># Good morning' } }] });
     assert.equal(await createOpenRouterComposer('sk-or-x', 'some/model')(input), '> Written by openrouter/free, a free model.\n\n# Good morning');
     const body = JSON.parse(String((fetchMock.mock.calls[0]!.arguments[1] as RequestInit).body));
-    like(body, { model: 'openrouter/free', max_tokens: 4000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
+    like(body, { model: 'openrouter/free', max_tokens: 5000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
     assert.equal(body.tools, undefined);
   });
 
@@ -654,12 +659,12 @@ describe('OpenRouter', () => {
     });
     assert.equal(await createOpenRouterComposer('k', 'paid/m', { freeModels: async () => ['f/x:free'] })(input), '# Good morning');
     assert.deepEqual(bodies.map((b) => [b.model, b.reasoning, b.max_tokens]), [
-      ['f/x:free', { enabled: false }, 4000],
+      ['f/x:free', { enabled: false }, 5000],
       ['f/x:free', { effort: 'low', exclude: true }, 12000],
-      ['openrouter/free', { enabled: false }, 4000],
+      ['openrouter/free', { enabled: false }, 5000],
       ['openrouter/free', { effort: 'low', exclude: true }, 12000],
-      ['paid/m', { enabled: false }, 4000],
-      ['paid/m', { effort: 'low', exclude: true }, 4000],
+      ['paid/m', { enabled: false }, 5000],
+      ['paid/m', { effort: 'low', exclude: true }, 5000],
     ]);
   });
 

@@ -115,6 +115,8 @@ export class BriefService {
     const input = {
       kind,
       date,
+      time: new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now),
+      weekday: new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'long' }).format(now),
       timezone: zone,
       goals,
       previousNote,

@@ -7,7 +7,7 @@ import { SwipeRow } from '../SwipeRow';
 import type { Api } from '../api';
 import { useRefresh } from '../refresh';
 import { autoBriefFor, freshness } from '../staleBrief';
-import { parseBrief, type Goal, type GoalStatus, type NoiseItem, type ParsedBrief, type Priority } from '../parseBrief';
+import { parseBrief, type Energy, type Goal, type GoalStatus, type NoiseItem, type ParsedBrief, type PlanBlock, type Priority } from '../parseBrief';
 import { Button, display, ErrorNote, F, Loading, message, R, Screen, useColors, type Colors } from '../ui';
 
 const WIDE_AT = 860;
@@ -150,6 +150,7 @@ function Focus({ items, text, wide }: { items: Priority[]; text: string | null; 
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
                     {item.source ? <Tag label={item.source} fg={c.ink2} bg="transparent" /> : null}
                     {item.goal ? <Text style={{ flexShrink: 1, color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{`moves ${item.goal}`}</Text> : null}
+                    {item.when ? <Text style={{ color: c.cool, fontFamily: F.mono, fontSize: 13, lineHeight: 18, marginLeft: 'auto' }}>{item.when}</Text> : null}
                   </View>
                 </View>
               </View>
@@ -161,6 +162,55 @@ function Focus({ items, text, wide }: { items: Priority[]; text: string | null; 
           <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 18, lineHeight: 25 }}>{text}</Text>
         </View>
       ) : null}
+    </View>
+  );
+}
+
+// ——— Day plan ————————————————————————————————————————————————————————
+
+const ENERGY_LABEL: Record<Exclude<Energy, null>, string> = { high: 'High energy', medium: 'Medium energy', low: 'Low energy', fixed: 'Fixed' };
+const energyTone = (energy: Energy, c: Colors) =>
+  energy === 'high' ? { fg: c.accent, bg: 'transparent' } : energy === 'fixed' ? { fg: c.ink2, bg: c.deep } : { fg: c.muted, bg: 'transparent' };
+const minutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+/** The day in time blocks, each matched to the energy it needs. The block happening now is marked, on today's brief only. */
+function DayPlan({ blocks, createdAt }: { blocks: PlanBlock[]; createdAt: string }) {
+  const c = useColors();
+  const now = new Date();
+  const today = new Date(createdAt).toDateString() === now.toDateString();
+  const at = now.getHours() * 60 + now.getMinutes();
+  const current = today ? blocks.findIndex((b) => b.end && minutes(b.start) <= at && at < minutes(b.end)) : -1;
+  const first = blocks[0]!.start;
+  const last = blocks.at(-1)!.end ?? blocks.at(-1)!.start;
+  return (
+    <View style={{ gap: 12 }}>
+      <Head aside={`${first}–${last}, by energy`}>day plan</Head>
+      <Panel>
+        {blocks.map((block, i) => {
+          const tone = energyTone(block.energy, c);
+          return (
+            <Row key={i} first={i === 0} selected={i === current}>
+              <View style={{ flexDirection: 'row', gap: 14 }}>
+                <View style={{ width: 52 }}>
+                  <Text style={{ color: i === current ? c.accent : c.text, fontFamily: F.monoMedium, fontSize: 14, lineHeight: 22 }}>{block.start}</Text>
+                  {block.end ? <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 12, lineHeight: 16 }}>{block.end}</Text> : null}
+                </View>
+                <View style={{ flex: 1, gap: 6 }}>
+                  <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 16, lineHeight: 22 }}>{block.task}</Text>
+                  {block.why ? <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 14, lineHeight: 20 }}>{block.why}</Text> : null}
+                  {block.energy || block.goal || i === current ? (
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
+                      {i === current ? <Tag label="Now" fg={c.accent} bg="transparent" /> : null}
+                      {block.energy ? <Tag label={ENERGY_LABEL[block.energy]} fg={tone.fg} bg={tone.bg} /> : null}
+                      {block.goal ? <Text style={{ flexShrink: 1, color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{`moves ${block.goal}`}</Text> : null}
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            </Row>
+          );
+        })}
+      </Panel>
     </View>
   );
 }
@@ -333,6 +383,7 @@ function FrontPage({ brief, wide, ledger }: { brief: Brief; wide: boolean; ledge
         <Masthead brief={brief} greeting={greeting} wide={wide} />
         {parsed.notice ? <Text style={{ color: c.muted, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>{parsed.notice}</Text> : null}
         {parsed.focusItems.length || parsed.focus ? <Focus items={parsed.focusItems} text={parsed.focus} wide={wide} /> : null}
+        {parsed.plan.length ? <DayPlan blocks={parsed.plan} createdAt={brief.createdAt} /> : null}
 
         <View style={{ gap: 12 }}>
           <Head aside={parsed.priorities.length ? `${count(parsed.priorities.length, 'signal')}, scored against your goals` : null}>signals</Head>

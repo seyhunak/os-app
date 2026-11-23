@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseBrief, parseGoal, parsePriority } from '../src/parseBrief';
+import { parseBrief, parseGoal, parsePlanBlock, parsePriority } from '../src/parseBrief';
 
 function project(actual: unknown, expected: unknown): unknown {
   if (!expected || typeof expected !== 'object' || Array.isArray(expected) || !actual || typeof actual !== 'object') return actual;
@@ -12,7 +12,7 @@ const like = (actual: unknown, expected: Record<string, unknown>) => assert.deep
 describe('parsePriority', () => {
   it('reads a full line', () => {
     assert.deepEqual(parsePriority('🔥 [Gmail] Contract redlines → Confirm by Friday | Score: 85'), {
-      source: 'Gmail', goal: null, unaligned: false, headline: 'Contract redlines', action: 'Confirm by Friday', score: 85, level: 'critical',
+      source: 'Gmail', goal: null, unaligned: false, headline: 'Contract redlines', action: 'Confirm by Friday', score: 85, level: 'critical', when: null,
     });
   });
 
@@ -184,5 +184,39 @@ describe('the Lumen brief layout', () => {
     assert.deepEqual(parsed.noise, [{ item: 'A thread on databases', source: 'Hacker News', reason: 'not tied to a goal', score: 30 }]);
     assert.equal(parsed.goals[0]?.status, 'at-risk');
     assert.equal(parsed.note, 'Check whether Pat paid.');
+  });
+});
+
+describe('day plan', () => {
+  it('reads a block with its time, energy, why and goal', () => {
+    assert.deepEqual(parsePlanBlock('09:00–10:30 | High | German: finish Lesson 12 and 20 Anki cards → fresh morning focus suits new grammar | Goal: Pass B1 German (KR1)'), {
+      start: '09:00', end: '10:30', energy: 'high', task: 'German: finish Lesson 12 and 20 Anki cards', why: 'fresh morning focus suits new grammar', goal: 'Pass B1 German (KR1)',
+    });
+  });
+
+  it('copes with looser lines and skips ones without a time', () => {
+    like(parsePlanBlock('**9.00 - 9.30** Low energy | Inbox replies -> dip'), { start: '09:00', end: '09:30', energy: 'low', task: 'Inbox replies', why: 'dip', goal: null });
+    like(parsePlanBlock('13:00–13:45 | Fixed | Call with Pat'), { energy: 'fixed', task: 'Call with Pat', why: null });
+    like(parsePlanBlock('12:30–13:00 | Lunch | Goal: none'), { energy: null, task: 'Lunch', goal: null });
+    assert.equal(parsePlanBlock('Lunch whenever'), null);
+  });
+
+  it('puts the plan and each focus slot on the parsed brief', () => {
+    const parsed = parseBrief([
+      '# Good morning',
+      '### Focus',
+      '- [Goals] German Lesson 12 → exam in 3 weeks | Goal: Pass B1 German (KR1) | When: 09:00-10:30',
+      '### Day Plan',
+      '- 09:00–10:30 | High | German Lesson 12 → morning peak | Goal: Pass B1 German (KR1)',
+      '- 14:00–14:30 | Low | Reply to Pat → post-lunch dip',
+      '### Signals',
+      'No signals today.',
+    ].join('\n'));
+    like(parsed.focusItems[0]!, { headline: 'German Lesson 12', action: 'exam in 3 weeks', goal: 'Pass B1 German (KR1)', when: '09:00–10:30' });
+    assert.deepEqual(parsed.plan.map((b) => [b.start, b.energy]), [['09:00', 'high'], ['14:00', 'low']]);
+  });
+
+  it('is empty for briefs written before the plan existed', () => {
+    assert.deepEqual(parseBrief('# Good morning\n### Signals\nNo signals today.').plan, []);
   });
 });
