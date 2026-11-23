@@ -43,7 +43,7 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 There are four kinds of brief: morning, afternoon, evening and night. Every brief opens with a greeting for its kind (good morning, good afternoon, good evening or good night) and the date and time it was written. Then, in this order:
 
 1. **Focus:** the 3 most important things to do, drawn from your goals and your tools together, each with its source, the goal it moves, what "done" looks like, and the time slot it sits in. A step that comes from a goal alone, with no tool item behind it, shows "Goals" as its source.
-2. **Day plan:** the rest of the day in time blocks, from the time the brief is written, each matched to the energy it needs. Deep work such as studying a language, writing or coding goes in the morning peak; light work and short replies go in the post-lunch dip; calls and collaboration go late morning or late afternoon. Calendar events keep their real times and are marked fixed. If your goals or updates say when you work best or how you feel, the plan follows that instead. The block happening now is marked.
+2. **Day plan:** the rest of the day in time blocks, from the time the brief is written, each matched to the energy it needs. Deep work such as studying a language, writing or coding goes in your sharpest hours; light work and short replies go in your dip; calls and collaboration go in steady hours or your second wind. Which hours those are comes from your energy peak in Settings. Calendar events keep their real times and are marked fixed. If an update says how you slept or feel today, the plan follows that instead. The block happening now is marked. The block happening now is marked.
 3. **Signals:** items scored from 0 to 100 against your goals, highest first, each with its source and the goal it serves. Only items scoring 60 or more are signals (80 or more is critical). Shown open.
 4. **Noise:** what scored under 60, with its source, its score and why it was left out. It starts collapsed.
 5. **Goal progress:** the health of each goal (on track, needs attention, at risk or no evidence), the evidence for it and its next action. The heading sums it up, such as "2 on track, 1 at risk".
@@ -78,6 +78,7 @@ Tap **Update** at the top of the app any time to log what you've done. Updates g
 ## Settings
 
 - **Goals:** paste them one per line, or as notes. Every brief ranks against them.
+- **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
 - **Tools:** grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
 - **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and the paid model each brief falls back to. Once both are set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).

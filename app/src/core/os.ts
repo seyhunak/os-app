@@ -1,7 +1,7 @@
 import { BriefService, selectedToolkits } from './briefs';
 import { TOOLKITS, toolkitBySlug } from './collectors';
 import type { ComposioGateway, ConnectedAccount } from './composio';
-import { createComposer, DEFAULT_MODEL, describeComposeError, draftOkrs, listOpenRouterModels, MAX_GOALS, pickFree, type AiConfig, type Composer, type ModelOption, type OnProgress } from './compose';
+import { createComposer, DEFAULT_ENERGY_PEAK, DEFAULT_MODEL, isEnergyPeak, type EnergyPeak, describeComposeError, draftOkrs, listOpenRouterModels, MAX_GOALS, pickFree, type AiConfig, type Composer, type ModelOption, type OnProgress } from './compose';
 import type { Brief, Kind, Schedule, Store } from './db';
 import { redact } from './redact';
 import { dueSchedule, nextRun } from './schedule';
@@ -132,6 +132,10 @@ export function createOs(deps: OsDeps) {
     now,
   });
 
+  const energyPeak = (): EnergyPeak => {
+    const saved = store.getSetting('energy_peak');
+    return isEnergyPeak(saved) ? saved : DEFAULT_ENERGY_PEAK;
+  };
   const schedulesChanged = () => deps.onSchedulesChanged?.(store.listSchedules());
   const withNextRun = (s: Schedule) => ({ ...s, nextRun: nextRun(s, now())?.toISOString() ?? null });
 
@@ -146,6 +150,7 @@ export function createOs(deps: OsDeps) {
         model: openRouterModel(),
         openrouterModel: openRouterModel(),
         timezone: store.getSetting('timezone'),
+        energyPeak: energyPeak(),
         selectedToolkits: selectedToolkits(store),
         hasBriefs: store.latestBrief() !== null,
         hasSchedules: store.listSchedules().length > 0,
@@ -289,6 +294,12 @@ export function createOs(deps: OsDeps) {
       const written = await okrs(goal, MAX_GOALS - list.length + 1);
       writeGoals([...list.slice(0, index), ...written, ...list.slice(index + 1)]);
       return { goals: goalList(), max: MAX_GOALS };
+    },
+
+    async saveEnergyPeak(peak: EnergyPeak) {
+      if (!isEnergyPeak(peak)) throw new OsError('Unknown energy peak');
+      store.setSetting('energy_peak', peak);
+      return { energyPeak: peak };
     },
 
     async saveTimezone(timezone: string) {
