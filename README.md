@@ -42,11 +42,12 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 
 There are four kinds of brief: morning, afternoon, evening and night. Every brief opens with a greeting for its kind (good morning, good afternoon, good evening or good night) and the date and time it was written. Then, in this order:
 
-1. **Focus:** the 3 most important things to do, drawn from your goals and your tools together, each with its source and the goal it moves. A step that comes from a goal alone, with no tool item behind it, shows "Goals" as its source.
-2. **Signals:** items scored from 0 to 100 against your goals, highest first, each with its source and the goal it serves. Only items scoring 60 or more are signals (80 or more is critical). Shown open.
-3. **Noise:** what scored under 60, with its source, its score and why it was left out. It starts collapsed.
-4. **Goal progress:** the health of each goal (on track, needs attention, at risk or no evidence), the evidence for it and its next action. The heading sums it up, such as "2 on track, 1 at risk".
-5. **Sources:** every tool you selected, with a sentence or two on what it added up to, how many items it had, and whether it was read today, reused from the cache or failed.
+1. **Focus:** the 3 most important things to do, drawn from your goals and your tools together, each with its source, the goal it moves, what "done" looks like, and the time slot it sits in. A step that comes from a goal alone, with no tool item behind it, shows "Goals" as its source.
+2. **Day plan:** the rest of the day in time blocks, from the time the brief is written, each matched to the energy it needs. Deep work such as studying a language, writing or coding goes in the morning peak; light work and short replies go in the post-lunch dip; calls and collaboration go late morning or late afternoon. Calendar events keep their real times and are marked fixed. If your goals or updates say when you work best or how you feel, the plan follows that instead. The block happening now is marked.
+3. **Signals:** items scored from 0 to 100 against your goals, highest first, each with its source and the goal it serves. Only items scoring 60 or more are signals (80 or more is critical). Shown open.
+4. **Noise:** what scored under 60, with its source, its score and why it was left out. It starts collapsed.
+5. **Goal progress:** the health of each goal (on track, needs attention, at risk or no evidence), the evidence for it and its next action. The heading sums it up, such as "2 on track, 1 at risk".
+6. **Sources:** every tool you selected, with a sentence or two on what it added up to, how many items it had, and whether it was read today, reused from the cache or failed.
 
 A second section carries over to the next brief:
 
@@ -55,12 +56,12 @@ A second section carries over to the next brief:
 
 What each kind is for:
 
-| Kind | Focus | Reads your tools |
-|---|---|---|
-| Morning | The 3 most important things to do today | Yes, once a day |
-| Afternoon | What to finish before the day ends, given what has moved | Reuses today's data, or reads if there's none |
-| Evening | What to close today or start with tomorrow | No, uses the day's data |
-| Night | The 3 things to start with tomorrow | No, uses the day's data |
+| Kind | Focus | Day plan | Reads your tools |
+|---|---|---|---|
+| Morning | The 3 most important things to do today | The rest of today, hardest work first | Yes, once a day |
+| Afternoon | What to finish before the day ends, given what has moved | Light work through the dip, then the hardest remaining task | Reuses today's data, or reads if there's none |
+| Evening | What to close today or start with tomorrow | A light evening, then tomorrow's first blocks | No, uses the day's data |
+| Night | The 3 things to start with tomorrow | Tomorrow, from a normal start | No, uses the day's data |
 
 Older briefs, written before this layout, still open. They show the sections they have.
 
@@ -193,7 +194,7 @@ Go to **Settings → Model**, paste your OpenRouter key once, and pick a paid mo
 
 The default paid model is `qwen/qwen3.7-flash`, at well under a cent per brief.
 
-- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 4,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked for low effort and to keep it out of the answer. Some ignore that and think for 3,000 tokens or more anyway, so a free model like that gets 12,000 output tokens to finish in. Paid models always keep the 4,000 cap.
+- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 5,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked for low effort and to keep it out of the answer. Some ignore that and think for 3,000 tokens or more anyway, so a free model like that gets 12,000 output tokens to finish in. Paid models always keep the 5,000 cap.
 - **Other failures.** You still get a plain brief that explains why, such as a model your guardrails don't allow.
 
 ### Free models first
@@ -270,7 +271,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 - Scheduled briefs are written when you open the app or its reminder, not in the background.
 - Android builds haven't been tested yet. iOS has.
 - Free models and the default paid model are cheap and can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't yours.
-- Focus, scores and noise need an AI model. A plain brief, written without one, lists your goals, your sources and the last brief's note only.
+- Focus, the day plan, scores and noise need an AI model. A plain brief, written without one, lists your goals, your sources and the last brief's note only.
 - Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. Salesforce, ClickUp, Microsoft To Do, Microsoft Teams, Zoom and Sentry are new and untested on real accounts, and Composio's default sign-in may not grant what some of them need to read, such as Teams chats or Sentry events. A tool that fails is named in the brief.
 - Calendars cover this week only, through Sunday, so next week's meetings don't appear until Monday. Email covers your last 5 from the last 3 days.
 - You can select the tools listed above. Other Composio tools need a collector first.
