@@ -5,7 +5,8 @@ import { COMPOSIO_URL, type Api, type ModelOption, type Status } from '../api';
 import { GoalModal } from '../GoalModal';
 import { useRefresh } from '../refresh';
 import { ToolList } from '../ToolList';
-import { Button, Card, display, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
+import { DEFAULT_ENERGY_PEAK, ENERGY_PEAK_LABEL, ENERGY_PEAK_PROFILE, ENERGY_PEAKS, type EnergyPeak } from '../core/compose';
+import { Button, Card, Chip, display, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
 
 const DOTS = '••••••••••••';
 
@@ -377,6 +378,31 @@ function GoalsSection({ api, hasAiKey }: { api: Api; hasAiKey: boolean }) {
   );
 }
 
+/** When energy peaks, so the day plan puts deep work in the sharpest hours. Saved as soon as it's picked. */
+function EnergySection({ api, saved, onChanged }: { api: Api; saved: EnergyPeak; onChanged(): void }) {
+  const c = useColors();
+  const [peak, setPeak] = useState(saved);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => setPeak(saved), [saved]);
+  const pick = (next: EnergyPeak) => {
+    if (next === peak) return;
+    const before = peak;
+    setPeak(next);
+    setError(null);
+    api.saveEnergyPeak(next).then(onChanged, (e) => { setPeak(before); setError(message(e)); });
+  };
+  return (
+    <View style={{ gap: 10 }}>
+      <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 15, lineHeight: 22 }}>When you're sharpest. The day plan puts deep work there and light work in your dip.</Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+        {ENERGY_PEAKS.map((p) => <Chip key={p} label={ENERGY_PEAK_LABEL[p]} selected={p === peak} onPress={() => pick(p)} />)}
+      </View>
+      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>{ENERGY_PEAK_PROFILE[peak]}</Text>
+      <ErrorNote message={error} />
+    </View>
+  );
+}
+
 export function SettingsScreen({ api, status, onChanged }: { api: Api; status: Status; onChanged(): void }) {
   // Set-up sections start collapsed to keep the page quiet. Anything missing starts open.
   const keys = composioState(status);
@@ -385,6 +411,9 @@ export function SettingsScreen({ api, status, onChanged }: { api: Api; status: S
     <Screen>
       <Title>Settings</Title>
       <GoalsSection api={api} hasAiKey={Boolean(status.openrouter)} />
+      <Section title="Energy" collapsed summary={ENERGY_PEAK_LABEL[status.energyPeak ?? DEFAULT_ENERGY_PEAK]}>
+        <EnergySection api={api} saved={status.energyPeak ?? DEFAULT_ENERGY_PEAK} onChanged={onChanged} />
+      </Section>
       <Section title="Tools"><ToolList api={api} /></Section>
       <Section title="Keys" collapsed={keys.configured} summary={keys.summary}>
         <KeyRow name="Composio" label="Composio API key" state={status.composio} hint={status.composioHint} getKeyUrl={COMPOSIO_URL} onSave={(k) => api.saveComposioKey(k).then(onChanged)} onRemove={() => api.removeCredential('composio').then(onChanged)} />

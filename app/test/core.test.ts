@@ -535,6 +535,19 @@ describe('brief composition', () => {
     assert.doesNotMatch(JSON.stringify(seen!.facts), /meet\.google|123456/);
   });
 
+  it('sends the energy peak from Settings, standard until one is picked', async () => {
+    const seen: BriefInput[] = [];
+    const { os } = await connected({ composer: async (input) => { seen.push(input); return '# Good morning'; } });
+    assert.equal((await os.status()).energyPeak, 'standard');
+    await os.generateBrief('morning');
+    await assert.rejects(os.saveEnergyPeak('lark' as never), OsError);
+    await os.saveEnergyPeak('night');
+    assert.equal((await os.status()).energyPeak, 'night');
+    await os.generateBrief('afternoon');
+    assert.deepEqual(seen.map((i) => i.energyPeak), ['standard', 'night']);
+    assert.match(renderUserPrompt(seen[1]!), /<energy_profile>\nNight owl: .*sharpest 16:00–22:00/);
+  });
+
   it('adds the source table even if the model leaves the marker out', async () => {
     const { os } = await connected({ composer: async () => '# Good morning' });
     const brief = await os.generateBrief('morning');

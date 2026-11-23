@@ -1,6 +1,6 @@
 import { toolkitBySlug } from './collectors';
 import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
-import { compactNote, describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer, type OnProgress } from './compose';
+import { compactNote, DEFAULT_ENERGY_PEAK, isEnergyPeak, describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer, type OnProgress } from './compose';
 import { neverPulls, type Brief, type Kind, type SourceReport, type Store } from './db';
 import { redact, redactDeep } from './redact';
 
@@ -118,6 +118,7 @@ export class BriefService {
       time: new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now),
       weekday: new Intl.DateTimeFormat('en-GB', { timeZone: zone, weekday: 'long' }).format(now),
       timezone: zone,
+      energyPeak: ((peak) => (isEnergyPeak(peak) ? peak : DEFAULT_ENERGY_PEAK))(store.getSetting('energy_peak')),
       goals,
       previousNote,
       updates: updates.map((entry) => ({

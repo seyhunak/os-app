@@ -36,6 +36,19 @@ const tooSmall = (id: string) => /mistral-nemo/i.test(id) || [...id.matchAll(/-(
 /** Caps what one brief can cost, since the key has a budget. */
 const MAX_OUTPUT_TOKENS = 5000;
 
+/** When the user's energy peaks, so the day plan puts hard work there. */
+export type EnergyPeak = 'early' | 'standard' | 'night';
+export const ENERGY_PEAKS: EnergyPeak[] = ['early', 'standard', 'night'];
+export const DEFAULT_ENERGY_PEAK: EnergyPeak = 'standard';
+export const isEnergyPeak = (value: unknown): value is EnergyPeak => ENERGY_PEAKS.includes(value as EnergyPeak);
+export const ENERGY_PEAK_LABEL: Record<EnergyPeak, string> = { early: 'Early bird', standard: 'Standard', night: 'Night owl' };
+/** What each one means, shown under the choice in Settings and sent to the model as the energy profile. */
+export const ENERGY_PEAK_PROFILE: Record<EnergyPeak, string> = {
+  early: 'Starts around 06:00, sharpest 06:00–10:00, dips 13:00–15:00, a small second wind 15:00–17:00, low after 19:00.',
+  standard: 'Starts around 08:30, sharpest 09:00–12:00, dips 13:00–15:00, a second wind 16:00–18:00, low after 20:00.',
+  night: 'Starts around 10:00 and is slow until noon, steady 13:00–15:00, sharpest 16:00–22:00, low after midnight.',
+};
+
 export interface BriefInput {
   kind: Kind;
   date: string;
@@ -44,6 +57,8 @@ export interface BriefInput {
   /** The local weekday, such as "Monday". */
   weekday?: string;
   timezone: string;
+  /** When the user's energy peaks. Standard when not set. */
+  energyPeak?: EnergyPeak;
   goals: string;
   /** The "Note for Next Brief" from the last brief, if it had one. */
   previousNote: string | null;
@@ -99,11 +114,12 @@ Focus is real work, never inbox chores:
 - A tool item enters Focus only if it would score 80 or more as a signal. Otherwise use the next step of the goal most at risk, with [Goals] as the source.
 
 Plan the day around energy and time:
-- Match each task to the energy it needs. Most people peak in the first 2 to 4 hours after starting their day, dip after lunch (about 13:00 to 15:00), get a second wind in late afternoon, and run low in the evening.
-- High energy is for deep, hard work: learning a language, writing, studying, design, coding, strategy, hard decisions. Put it in the morning peak.
-- Medium energy is for collaboration: calls, meetings, interviews, outreach, reviews with others. Put it late morning or late afternoon.
-- Low energy is for admin and light work: short replies, errands, filing, planning tomorrow, spaced-repetition review, reading. Put it in the post-lunch dip or the evening.
-- If goals, updates or the note say when the user works best, how they slept, or how they feel, that overrides the defaults.
+- Match each task to the energy it needs, using the user's energy profile: when they start, when they are sharpest, when they dip and when they run low.
+- High energy is for deep, hard work: learning a language, writing, studying, design, coding, strategy, hard decisions. Put it in their sharpest hours.
+- Medium energy is for collaboration: calls, meetings, interviews, outreach, reviews with others. Put it in steady hours or the second wind.
+- Low energy is for admin and light work: short replies, errands, filing, planning tomorrow, spaced-repetition review, reading. Put it in the dip or their low hours.
+- Never plan before their start or deep in their low hours.
+- If goals, updates or the note say when the user works best, how they slept, or how they feel, that overrides the energy profile.
 - Calendar events from source_data are fixed: keep their real times and plan around them. Never move or invent a meeting.
 - Never plan in the past: start from the current time. Leave a short break between deep blocks and keep a realistic lunch.
 - Size each block to the task, usually 25 to 120 minutes. Name exactly what gets done in it, like "German: finish Lesson 12 and 20 Anki cards", never just "Work on German".
@@ -157,10 +173,10 @@ ${SOURCES_MARKER}
 ${noteGuide} The next brief sees only this note and newer updates, so carry what's still open and any progress it needs as goal evidence. Under ${NOTE_WORDS} words, terse fragments separated by semicolons, on one line, no filler.`;
 
 const STRUCTURE: Record<Kind, string> = {
-  morning: template('Good morning', 'The 3 most important things to do today.', 'The rest of today, from now, with the hardest work in the morning peak.', 'What matters today.', 'What the next brief should check first.'),
-  afternoon: template('Good afternoon', 'The 3 most important things to finish before the day ends, given what has already moved since this morning.', 'The rest of today, from now: light work through the post-lunch dip, the hardest remaining task in the late-afternoon second wind.', 'What still matters today, given what has already happened.', 'What the evening brief should check, and anything to hand over to tomorrow.'),
+  morning: template('Good morning', 'The 3 most important things to do today.', 'The rest of today, from now, with the hardest work in the sharpest hours.', 'What matters today.', 'What the next brief should check first.'),
+  afternoon: template('Good afternoon', 'The 3 most important things to finish before the day ends, given what has already moved since this morning.', 'The rest of today, from now: light work through the dip, the hardest remaining task in the sharpest hours left.', 'What still matters today, given what has already happened.', 'What the evening brief should check, and anything to hand over to tomorrow.'),
   evening: template('Good evening', 'The 3 most important things to close today or start with tomorrow.', 'The rest of this evening, light work only (2 to 4 blocks), then a wind-down, followed by the first 2 blocks of tomorrow morning labelled "Tomorrow".', 'What mattered today and how each one ended, based only on the evidence.', 'What to start with tomorrow, with carry or drop for anything unfinished.'),
-  night: template('Good night', 'The 3 things to start with tomorrow, so nothing needs deciding in the morning.', "Tomorrow's day, from a normal start, with the hardest work in the morning peak. Start each task with \"Tomorrow:\" only if it is ambiguous.", 'What is still open at the end of the day, based only on the evidence. Nothing here is for tonight.', 'What the morning brief should pick up first, with carry or drop for anything unfinished.'),
+  night: template('Good night', 'The 3 things to start with tomorrow, so nothing needs deciding in the morning.', "Tomorrow's day, from the user's usual start, with the hardest work in the sharpest hours. Start each task with \"Tomorrow:\" only if it is ambiguous.", 'What is still open at the end of the day, based only on the evidence. Nothing here is for tonight.', 'What the morning brief should pick up first, with carry or drop for anything unfinished.'),
 };
 
 /**
@@ -177,6 +193,7 @@ export function renderUserPrompt(input: BriefInput): string {
   const named = Object.fromEntries(Object.entries(input.facts).map(([slug, items]) => [input.sources.find((s) => s.toolkit === slug)?.name ?? slug, items]));
   return [
     `Today is ${input.weekday ? `${input.weekday}, ` : ''}${input.date}${input.time ? `, and it is ${input.time} in ${input.timezone}` : ''}. Write the ${input.kind} brief.`,
+    `<energy_profile>\n${ENERGY_PEAK_LABEL[input.energyPeak ?? DEFAULT_ENERGY_PEAK]}: ${ENERGY_PEAK_PROFILE[input.energyPeak ?? DEFAULT_ENERGY_PEAK]}\n</energy_profile>`,
     `<goals>\n${escapeTags(input.goals.trim()) || 'No goals set yet. Write "insufficient evidence" under Goal Progress and suggest pasting them in Settings.'}\n</goals>`,
     `<updates>\n${updates || 'None yet.'}\n</updates>`,
     input.previousNote ? `<note_from_last_brief>\n${escapeTags(input.previousNote)}\n</note_from_last_brief>` : '',

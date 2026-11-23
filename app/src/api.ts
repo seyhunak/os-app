@@ -22,6 +22,8 @@ export interface Status {
   openrouterModel?: string;
   model: string;
   timezone: string | null;
+  /** When the user's energy peaks, which shapes the day plan. */
+  energyPeak?: 'early' | 'standard' | 'night';
   selectedToolkits: string[];
   hasBriefs: boolean;
   hasSchedules: boolean;
