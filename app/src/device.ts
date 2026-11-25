@@ -8,6 +8,7 @@ import { Store, type Schedule, type Secrets, type Sql } from './core/db';
 import { isOldKey, migrateOldCopy } from './core/migrate';
 import { createOs, type Os } from './core/os';
 import { reminders } from './core/schedule';
+import type { WoopReminder } from './core/woop';
 
 const KIND_TITLE: Record<Schedule['kind'], string> = { morning: 'Morning brief', afternoon: 'Afternoon brief', evening: 'Evening brief', night: 'Night brief' };
 const OLD_AI_KEY = 'os.offlineOpenRouterKey';
@@ -40,7 +41,7 @@ const keychain: Secrets = {
  */
 export async function setReminders(schedules: Schedule[]): Promise<void> {
   try {
-    await Notifications.cancelAllScheduledNotificationsAsync();
+    await cancelWhere((woop) => !woop);
     const wanted = reminders(schedules);
     if (!wanted.length) return;
     const permission = await Notifications.getPermissionsAsync();
@@ -53,6 +54,36 @@ export async function setReminders(schedules: Schedule[]): Promise<void> {
     }
   } catch {
     // Reminders are a convenience. A failure here never stops the schedule itself.
+  }
+}
+
+/** Brief reminders and WOOP reminders are set apart, so setting one never clears the other. */
+async function cancelWhere(match: (isWoop: boolean) => boolean): Promise<void> {
+  const scheduled = await Notifications.getAllScheduledNotificationsAsync();
+  for (const n of scheduled) {
+    if (match(n.content.data?.woop === true)) await Notifications.cancelScheduledNotificationAsync(n.identifier);
+  }
+}
+
+/**
+ * Sets the WOOP reminders: the if-then plan at the hour the obstacle tends to show up, and the
+ * review and next-week nudges. They're one-off dates, set again whenever the app opens.
+ */
+export async function setWoopReminders(list: WoopReminder[]): Promise<void> {
+  try {
+    await cancelWhere((woop) => woop);
+    if (!list.length) return;
+    const permission = await Notifications.getPermissionsAsync();
+    if (!permission.granted && !(await Notifications.requestPermissionsAsync()).granted) return;
+    for (const r of list) {
+      await Notifications.scheduleNotificationAsync({
+        identifier: r.id,
+        content: { title: r.title, body: r.body, data: { woop: true } },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: r.at },
+      });
+    }
+  } catch {
+    // Reminders are a convenience. WOOP works without them.
   }
 }
 
@@ -84,8 +115,9 @@ export function openOs(): Promise<Os> {
       createGateway: (apiKey) => createComposioGateway(apiKey),
       verifyOpenRouterKey,
       onSchedulesChanged: (schedules) => void setReminders(schedules),
+      onWoopChanged: (list) => void setWoopReminders(list),
     });
-    void setReminders(instance.listSchedules());
+    void setReminders(instance.listSchedules()).then(() => instance.syncWoopReminders());
     return instance;
   })();
   return os;

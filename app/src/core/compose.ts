@@ -568,17 +568,23 @@ export function parseOkrs(text: string, max = MAX_GOALS): string[] {
     .map((o) => [`O: ${o.objective}`, ...o.results.slice(0, MAX_KEY_RESULTS).map((r, i) => `KR${i + 1}: ${r}`)].join('\n'));
 }
 
-/** Writes up to `max` OKRs from free-form notes, with your model first and the free router as a fallback. */
-export async function draftOkrs(config: Pick<AiConfig, 'apiKey' | 'model'>, notes: string, max: number): Promise<string[]> {
+/**
+ * One short request: your model first, then the free router. `parse` returns null when the answer
+ * has nothing usable, which moves on to the next model. Used for OKRs and the WOOP helpers.
+ */
+export async function askSmall<T>(
+  config: Pick<AiConfig, 'apiKey' | 'model'>,
+  prompt: { system: string; user: string; maxTokens: number; empty: string; timeoutMs?: number },
+  parse: (text: string) => T | null,
+): Promise<T> {
   const body = (id: string, reasoning: Record<string, boolean | string>) => JSON.stringify({
     model: id,
-    // About 80 tokens an objective, with room to spare.
-    max_tokens: 150 + max * 150,
+    max_tokens: prompt.maxTokens,
     reasoning,
     provider: { data_collection: 'deny' },
     messages: [
-      { role: 'system', content: okrSystem(max) },
-      { role: 'user', content: `<notes>\n${escapeTags(notes.trim().slice(0, OKR_NOTES_LENGTH))}\n</notes>` },
+      { role: 'system', content: prompt.system },
+      { role: 'user', content: prompt.user },
     ],
   });
   let lastError: unknown = null;
@@ -588,7 +594,7 @@ export async function draftOkrs(config: Pick<AiConfig, 'apiKey' | 'model'>, note
         const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
           method: 'POST',
           headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-          signal: timeoutSignal(OKR_TIMEOUT_MS),
+          signal: timeoutSignal(prompt.timeoutMs ?? OKR_TIMEOUT_MS),
           body: body(id, reasoning),
         });
         const data = (await response.json().catch(() => ({}))) as ChatCompletion;
@@ -599,13 +605,30 @@ export async function draftOkrs(config: Pick<AiConfig, 'apiKey' | 'model'>, note
         }
         return data;
       };
-      const okrs = parseOkrs((await ask({ enabled: false })).choices?.[0]?.message?.content ?? '', max);
-      if (okrs.length) return okrs;
-      lastError = new Error("the model didn't write an OKR");
+      const parsed = parse((await ask({ enabled: false })).choices?.[0]?.message?.content ?? '');
+      if (parsed !== null) return parsed;
+      lastError = new Error(prompt.empty);
     } catch (error) {
       if (stopsChain(error)) throw error;
       lastError = error;
     }
   }
-  throw lastError ?? new Error("the model didn't write an OKR");
+  throw lastError ?? new Error(prompt.empty);
+}
+
+/** Text placed inside a data tag in a prompt, so it can't close the tag. */
+export const asData = escapeTags;
+
+/** Writes up to `max` OKRs from free-form notes, with your model first and the free router as a fallback. */
+export function draftOkrs(config: Pick<AiConfig, 'apiKey' | 'model'>, notes: string, max: number): Promise<string[]> {
+  return askSmall(config, {
+    system: okrSystem(max),
+    user: `<notes>\n${escapeTags(notes.trim().slice(0, OKR_NOTES_LENGTH))}\n</notes>`,
+    // About 80 tokens an objective, with room to spare.
+    maxTokens: 150 + max * 150,
+    empty: "the model didn't write an OKR",
+  }, (text) => {
+    const okrs = parseOkrs(text, max);
+    return okrs.length ? okrs : null;
+  });
 }

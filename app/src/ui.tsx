@@ -55,6 +55,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   return <ThemeContext.Provider value={useColorScheme() === 'dark' ? dark : light}>{children}</ThemeContext.Provider>;
 }
 
+/** Always the night palette, whatever the phone is set to. The WOOP flow is a quiet, dark room. */
+export function DarkTheme({ children }: { children: ReactNode }) {
+  return <ThemeContext.Provider value={dark}>{children}</ThemeContext.Provider>;
+}
+
 export function Screen({ children, maxWidth = 620 }: { children: ReactNode; maxWidth?: number }) {
   const c = useColors();
   return (
