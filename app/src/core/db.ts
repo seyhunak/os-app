@@ -1,3 +1,5 @@
+import type { CheckIn, Woop, WoopInput, WoopResult } from './woop';
+
 export type Kind = 'morning' | 'afternoon' | 'evening' | 'night';
 
 /** Evening and night briefs reuse the day's data and never read your tools. */
@@ -90,6 +92,13 @@ export class Store {
       CREATE TABLE IF NOT EXISTS schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, time TEXT NOT NULL, days TEXT NOT NULL,
         timezone TEXT NOT NULL, enabled INTEGER NOT NULL, last_run_at TEXT, last_status TEXT);
+      CREATE TABLE IF NOT EXISTS woops (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, week_start TEXT NOT NULL UNIQUE, wish TEXT NOT NULL,
+        outcome TEXT NOT NULL, obstacle TEXT NOT NULL, obstacle_tag TEXT NOT NULL, cue TEXT NOT NULL,
+        plan TEXT NOT NULL, created_at TEXT NOT NULL, result TEXT, review_note TEXT, reviewed_at TEXT);
+      CREATE TABLE IF NOT EXISTS woop_checkins (
+        woop_id INTEGER NOT NULL, date TEXT NOT NULL, progressed INTEGER NOT NULL,
+        obstacle_hit INTEGER NOT NULL, plan_used INTEGER NOT NULL, PRIMARY KEY (woop_id, date));
     `);
   }
 
@@ -207,6 +216,57 @@ export class Store {
     this.db.run('UPDATE schedules SET last_run_at = ?, last_status = ? WHERE id = ?', now.toISOString(), status, id);
   }
 
+  /** One WOOP a week. Saving it again for the same week edits it and keeps its check-ins. */
+  saveWoop(weekStart: string, w: WoopInput, now = new Date()): Woop {
+    this.db.run(`INSERT INTO woops (week_start, wish, outcome, obstacle, obstacle_tag, cue, plan, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(week_start) DO UPDATE SET wish = excluded.wish, outcome = excluded.outcome, obstacle = excluded.obstacle,
+        obstacle_tag = excluded.obstacle_tag, cue = excluded.cue, plan = excluded.plan`,
+    weekStart, w.wish, w.outcome, w.obstacle, w.obstacleTag, w.cue, w.plan, now.toISOString());
+    return this.woopForWeek(weekStart)!;
+  }
+
+  woopForWeek(weekStart: string): Woop | null {
+    const row = this.db.get('SELECT * FROM woops WHERE week_start = ?', weekStart);
+    return row ? toWoop(row) : null;
+  }
+
+  getWoop(id: number): Woop | null {
+    const row = this.db.get('SELECT * FROM woops WHERE id = ?', id);
+    return row ? toWoop(row) : null;
+  }
+
+  /** Newest week first. */
+  listWoops(limit = 52): Woop[] {
+    return this.db.all('SELECT * FROM woops ORDER BY week_start DESC LIMIT ?', limit).map(toWoop);
+  }
+
+  reviewWoop(id: number, result: WoopResult, note: string | null, now = new Date()): boolean {
+    return this.db.run('UPDATE woops SET result = ?, review_note = ?, reviewed_at = ? WHERE id = ?', result, note, now.toISOString(), id).changes > 0;
+  }
+
+  deleteWoop(id: number): boolean {
+    this.db.run('DELETE FROM woop_checkins WHERE woop_id = ?', id);
+    return this.db.run('DELETE FROM woops WHERE id = ?', id).changes > 0;
+  }
+
+  /** One check-in a day. Checking in again that day replaces it. */
+  saveCheckIn(c: CheckIn): void {
+    this.db.run(`INSERT INTO woop_checkins (woop_id, date, progressed, obstacle_hit, plan_used) VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(woop_id, date) DO UPDATE SET progressed = excluded.progressed, obstacle_hit = excluded.obstacle_hit, plan_used = excluded.plan_used`,
+    c.woopId, c.date, c.progressed ? 1 : 0, c.obstacleHit ? 1 : 0, c.obstacleHit && c.planUsed ? 1 : 0);
+  }
+
+  listCheckIns(woopIds: number[]): CheckIn[] {
+    if (!woopIds.length) return [];
+    return this.db.all(`SELECT * FROM woop_checkins WHERE woop_id IN (${woopIds.map(() => '?').join(', ')}) ORDER BY date`, ...woopIds).map((row) => ({
+      woopId: Number(row.woop_id),
+      date: String(row.date),
+      progressed: row.progressed === 1,
+      obstacleHit: row.obstacle_hit === 1,
+      planUsed: row.plan_used === 1,
+    }));
+  }
+
   /** Copies a brief over from the old server setup, keeping its original time. */
   importBrief(brief: Omit<Brief, 'id'>): void {
     this.db.run('INSERT INTO briefs (kind, trigger, generator, markdown, sources, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -215,7 +275,7 @@ export class Store {
 
   /** Removes everything OS keeps on this phone: every table's rows and both keys. */
   eraseAll(): void {
-    this.db.exec('DELETE FROM settings; DELETE FROM pulls; DELETE FROM briefs; DELETE FROM ledger; DELETE FROM schedules;');
+    this.db.exec('DELETE FROM settings; DELETE FROM pulls; DELETE FROM briefs; DELETE FROM ledger; DELETE FROM schedules; DELETE FROM woops; DELETE FROM woop_checkins;');
     this.secrets.delete('composio');
     this.secrets.delete('openrouter');
     // Erasing means starting over, not importing the old copy again.
@@ -257,5 +317,22 @@ function toSchedule(row: Row): Schedule {
     enabled: row.enabled === 1,
     lastRunAt: (row.last_run_at as string | null) ?? null,
     lastStatus: (row.last_status as string | null) ?? null,
+  };
+}
+
+function toWoop(row: Row): Woop {
+  return {
+    id: Number(row.id),
+    weekStart: String(row.week_start),
+    wish: String(row.wish),
+    outcome: String(row.outcome),
+    obstacle: String(row.obstacle),
+    obstacleTag: row.obstacle_tag as Woop['obstacleTag'],
+    cue: row.cue as Woop['cue'],
+    plan: String(row.plan),
+    createdAt: String(row.created_at),
+    result: (row.result as WoopResult | null) ?? null,
+    reviewNote: (row.review_note as string | null) ?? null,
+    reviewedAt: (row.reviewed_at as string | null) ?? null,
   };
 }

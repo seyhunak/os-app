@@ -5,6 +5,11 @@ import { createComposer, DEFAULT_ENERGY_PEAK, DEFAULT_MODEL, isEnergyPeak, type 
 import type { Brief, Kind, Schedule, Store } from './db';
 import { redact } from './redact';
 import { dueSchedule, nextRun } from './schedule';
+import {
+  addDays, insights, isCue, isObstacleTag, isWoopResult, LIMITS, localDay, plansFromHistory, predictFromHistory, streak, suggestObstacles, suggestPlans,
+  summarize, weekStartOf, woopReminders, type CheckIn, type ObstacleContext, type ObstacleSuggestion, type PlanContext, type PlanSuggestion,
+  type WoopInput, type WoopReminder, type WoopResult,
+} from './woop';
 
 export interface OsDeps {
   store: Store;
@@ -16,6 +21,12 @@ export interface OsDeps {
   draftOkrs?(config: AiConfig, notes: string, max: number): Promise<string[]>;
   /** Told whenever schedules change, so the phone can set its reminders again. */
   onSchedulesChanged?(schedules: Schedule[]): void;
+  /** Predicts this week's obstacles. Defaults to OpenRouter. */
+  suggestObstacles?(config: AiConfig, ctx: ObstacleContext): Promise<ObstacleSuggestion[]>;
+  /** Writes stronger if-then plans. Defaults to OpenRouter. */
+  suggestPlans?(config: AiConfig, ctx: PlanContext): Promise<PlanSuggestion[]>;
+  /** Told whenever the WOOP reminders change, so the phone can set them again. */
+  onWoopChanged?(reminders: WoopReminder[]): void;
   now?(): Date;
 }
 
@@ -136,6 +147,34 @@ export function createOs(deps: OsDeps) {
     const saved = store.getSetting('energy_peak');
     return isEnergyPeak(saved) ? saved : DEFAULT_ENERGY_PEAK;
   };
+  /** Every past and present week, newest first, with its check-ins. */
+  const woopHistory = () => {
+    const woops = store.listWoops();
+    const checkIns = store.listCheckIns(woops.map((w) => w.id));
+    return { woops, checkIns, summaries: woops.map((w) => summarize(w, checkIns)) };
+  };
+  const currentWoop = () => store.woopForWeek(weekStartOf(now()));
+  const woopChanged = () => deps.onWoopChanged?.(woopReminders(currentWoop(), energyPeak(), now(), store.listWoops(1).length > 0));
+  const recentUpdates = () => store.listLedger(20, new Date(now().getTime() - 14 * 86_400_000).toISOString()).map((e) => e.text);
+  const checkWoop = (input: WoopInput): WoopInput => {
+    const clean = (text: unknown, max: number, name: string, required = true) => {
+      const value = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim() : '';
+      if (required && !value) throw new OsError(`Write your ${name} first`);
+      if (value.length > max) throw new OsError(`Keep your ${name} under ${max} characters`);
+      return value;
+    };
+    if (!isObstacleTag(input.obstacleTag)) throw new OsError('Choose what kind of obstacle it is');
+    if (!isCue(input.cue)) throw new OsError('Choose when it usually shows up');
+    return {
+      wish: clean(input.wish, LIMITS.wish, 'wish'),
+      outcome: clean(input.outcome, LIMITS.outcome, 'outcome', false),
+      obstacle: clean(input.obstacle, LIMITS.obstacle, 'obstacle'),
+      obstacleTag: input.obstacleTag,
+      cue: input.cue,
+      plan: clean(input.plan, LIMITS.plan, 'plan'),
+    };
+  };
+
   const schedulesChanged = () => deps.onSchedulesChanged?.(store.listSchedules());
   const withNextRun = (s: Schedule) => ({ ...s, nextRun: nextRun(s, now())?.toISOString() ?? null });
 
@@ -371,10 +410,96 @@ export function createOs(deps: OsDeps) {
       }
     },
 
-    /** Erases keys, goals, updates, briefs and schedules from this phone, and its reminders. */
+    /** This week's WOOP with its check-ins, the weeks before it, your streak and what history shows. */
+    async woop() {
+      const { woops, checkIns, summaries } = woopHistory();
+      const week = weekStartOf(now());
+      const current = summaries.find((s) => s.woop.weekStart === week) ?? null;
+      const past = summaries.filter((s) => s.woop.weekStart < week);
+      // Last week's review is still open early in the new week, since that's when people do it.
+      const unreviewed = past.find((s) => !s.woop.result && s.woop.weekStart === addDays(week, -7));
+      return {
+        weekStart: week,
+        today: localDay(now()),
+        current,
+        unreviewed: unreviewed ?? null,
+        past,
+        streak: streak(woops, checkIns, now()),
+        insights: insights(summaries),
+      };
+    },
+    /** Saves this week's WOOP, or edits it. Its check-ins stay. */
+    async saveWoop(input: WoopInput) {
+      const woop = store.saveWoop(weekStartOf(now()), checkWoop(input), now());
+      woopChanged();
+      return woop;
+    },
+    async deleteWoop(id: number) {
+      if (!store.deleteWoop(id)) throw new OsError('WOOP not found');
+      woopChanged();
+      return { ok: true };
+    },
+    /** Today's check-in. A day can be changed until the week ends. */
+    async checkIn(input: Omit<CheckIn, 'date'> & { date?: string }) {
+      const woop = store.getWoop(input.woopId);
+      if (!woop) throw new OsError('WOOP not found');
+      const date = input.date ?? localDay(now());
+      if (date < woop.weekStart || date > addDays(woop.weekStart, 6) || date > localDay(now())) {
+        throw new OsError('Check in on a day of that week, up to today');
+      }
+      store.saveCheckIn({ woopId: woop.id, date, progressed: Boolean(input.progressed), obstacleHit: Boolean(input.obstacleHit), planUsed: Boolean(input.planUsed) });
+      return summarize(woop, store.listCheckIns([woop.id]));
+    },
+    async reviewWoop(id: number, result: WoopResult, note = '') {
+      if (!isWoopResult(result)) throw new OsError('Choose achieved, partly or missed');
+      const text = note.trim();
+      if (text.length > LIMITS.note) throw new OsError(`Keep the note under ${LIMITS.note} characters`);
+      if (!store.reviewWoop(id, result, text ? redact(text) : null, now())) throw new OsError('WOOP not found');
+      woopChanged();
+      return store.getWoop(id)!;
+    },
+    /**
+     * The likeliest inner obstacles to this wish. The AI reads your past weeks and updates; without
+     * a key, or when it fails, the ranking comes from history alone.
+     */
+    async predictObstacles(wish: string): Promise<{ suggestions: ObstacleSuggestion[]; source: 'ai' | 'history'; note: string | null }> {
+      const history = woopHistory().summaries.filter((s) => s.woop.weekStart < weekStartOf(now()));
+      const updates = recentUpdates();
+      const fromHistory = predictFromHistory(history, updates, energyPeak(), now());
+      const config = aiConfig();
+      if (!config || !wish.trim()) return { suggestions: fromHistory, source: 'history', note: config ? null : 'Add an OpenRouter key in Settings for AI predictions.' };
+      try {
+        const ai = await (deps.suggestObstacles ?? suggestObstacles)(config, { wish: wish.trim().slice(0, LIMITS.wish), peak: energyPeak(), history, updates: updates.map(redact), fromHistory });
+        return { suggestions: ai, source: 'ai', note: null };
+      } catch (error) {
+        return { suggestions: fromHistory, source: 'history', note: `AI predictions failed (${describeComposeError(error)}), so these come from your history.` };
+      }
+    },
+    /** Stronger "then I will…" actions, ranked by how past plans held up when the obstacle showed up. */
+    async optimizePlan(input: Omit<PlanContext, 'history'>): Promise<{ suggestions: PlanSuggestion[]; source: 'ai' | 'history'; note: string | null }> {
+      if (!isObstacleTag(input.tag)) throw new OsError('Choose what kind of obstacle it is');
+      const history = woopHistory().summaries.filter((s) => s.woop.weekStart < weekStartOf(now()));
+      const fromHistory = plansFromHistory(history, input.tag);
+      const config = aiConfig();
+      if (!config) return { suggestions: fromHistory, source: 'history', note: 'Add an OpenRouter key in Settings for AI plans.' };
+      try {
+        const ai = await (deps.suggestPlans ?? suggestPlans)(config, { ...input, history });
+        // A plan you've tested keeps its record, and the best proven one stays on the list.
+        const proven = fromHistory.filter((p) => p.rate !== null);
+        const merged = [...proven.slice(0, 1), ...ai.map((p) => proven.find((h) => h.plan.toLowerCase() === p.plan.toLowerCase()) ?? p)];
+        return { suggestions: [...new Map(merged.map((p) => [p.plan.toLowerCase(), p])).values()].slice(0, 3), source: 'ai', note: null };
+      } catch (error) {
+        return { suggestions: fromHistory, source: 'history', note: `AI plans failed (${describeComposeError(error)}), so these come from your history.` };
+      }
+    },
+    /** Sets the WOOP reminders again, such as when the app opens, since they run out at the week's end. */
+    syncWoopReminders: () => woopChanged(),
+
+    /** Erases keys, goals, updates, briefs, schedules and WOOPs from this phone, and its reminders. */
     async eraseEverything() {
       store.eraseAll();
       schedulesChanged();
+      woopChanged();
       return { ok: true };
     },
 

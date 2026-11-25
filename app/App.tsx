@@ -11,15 +11,17 @@ import type { Api, Status } from './src/api';
 import { openOs } from './src/device';
 import { RefreshContext } from './src/refresh';
 import { ComposioScreen, FirstBriefScreen, isOnboarded, ToolsScreen } from './src/screens/Onboarding';
+import { GoalsScreen } from './src/screens/Goals';
 import { SchedulesScreen } from './src/screens/Schedules';
 import { SettingsScreen } from './src/screens/Settings';
 import { TodayScreen } from './src/screens/Today';
 import { UpdateModal } from './src/UpdateModal';
 import { ErrorNote, F, Loading, message, R, Screen, ThemeProvider, Title, useColors } from './src/ui';
 
-type Tab = 'today' | 'schedule' | 'settings';
+type Tab = 'today' | 'goals' | 'schedule' | 'settings';
 const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'today', label: 'Today' },
+  { id: 'goals', label: 'Goals' },
   { id: 'schedule', label: 'Schedule' },
   { id: 'settings', label: 'Settings' },
 ];
@@ -110,8 +112,16 @@ function Root() {
   useEffect(() => {
     if (!api || !status || !isOnboarded(status)) return;
     void runDue();
-    const appState = AppState.addEventListener('change', (next) => next === 'active' && void runDue());
-    const tapped = Notifications.addNotificationResponseReceivedListener(() => void runDue());
+    const appState = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      void runDue();
+      // WOOP reminders are one-off dates, so they're set again for the days ahead.
+      api.syncWoopReminders();
+    });
+    const tapped = Notifications.addNotificationResponseReceivedListener((response) => {
+      if (response.notification.request.content.data?.woop === true) setTab('goals');
+      else void runDue();
+    });
     return () => {
       appState.remove();
       tapped.remove();
@@ -141,6 +151,7 @@ function Root() {
         <UpdateModal api={api} visible={updating} onClose={() => setUpdating(false)} />
         <View style={{ flex: 1 }}>
           {tab === 'today' ? <TodayScreen api={api} hasSchedules={status.hasSchedules} onSchedule={() => setTab('schedule')} /> : null}
+          {tab === 'goals' ? <GoalsScreen api={api} /> : null}
           {tab === 'schedule' ? <SchedulesScreen api={api} onChanged={() => void reload()} /> : null}
           {tab === 'settings' ? <SettingsScreen api={api} status={status} onChanged={() => void reload()} /> : null}
         </View>

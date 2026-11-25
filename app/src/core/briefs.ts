@@ -1,4 +1,5 @@
 import { toolkitBySlug } from './collectors';
+import { weekStartOf, woopForBrief } from './woop';
 import { RateLimitError, type ComposioGateway, type ConnectedAccount } from './composio';
 import { compactNote, DEFAULT_ENERGY_PEAK, isEnergyPeak, describeComposeError, extractNote, extractSourceSummaries, renderDigest, renderSources, SOURCES_MARKER, STATUS_LABEL, type Composer, type OnProgress } from './compose';
 import { neverPulls, type Brief, type Kind, type SourceReport, type Store } from './db';
@@ -92,7 +93,8 @@ export class BriefService {
     store.pruneCache(now);
 
     progress({ key: 'goals', text: 'Reading your goals and recent updates', state: 'running' });
-    const goals = store.getSetting('goals') ?? '';
+    // This week's WOOP rides along as one line, so Focus and the day plan can lean on its if-then plan.
+    const goals = [store.getSetting('goals') ?? '', woopForBrief(store.woopForWeek(weekStartOf(now)))].filter((g) => g.trim()).join('\n');
     // A digest never read the updates, so the window starts at the last brief an AI wrote.
     const lastRanked = store.listBriefs(30).find((b) => b.generator === 'ai');
     const updates = store.listLedger(UPDATES_SENT, lastRanked?.createdAt ?? new Date(now.getTime() - FIRST_UPDATES_MS).toISOString()).reverse();

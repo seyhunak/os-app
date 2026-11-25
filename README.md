@@ -13,6 +13,8 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
+Its **Goals** tab adds [WOOP](#goals-woop), a research-backed way to turn one weekly wish into an if-then plan in under five minutes, with AI that predicts what will get in your way and reminds you when it usually does.
+
 ## Architecture
 
 ```
@@ -20,9 +22,9 @@ OS reads your email, calendar and work tools through [Composio](https://composio
 ┌──────────────────────────────────────────┐
 │ Expo app (app/)                          │
 │ - Keychain / Keystore: your two API keys │      ┌──────────────────────────┐
-│ - SQLite: briefs, ledger, goals,         │ ───▶ │ Composio: your tools,    │
+│ - SQLite: briefs, ledger, goals, WOOPs,  │ ───▶ │ Composio: your tools,    │
 │   schedules, 7-day pull cache            │ HTTPS│ read-only                │
-│ - local reminders at schedule times      │      ├──────────────────────────┤
+│ - local reminders: briefs and WOOP plans │      ├──────────────────────────┤
 │ - brief rules, collectors, ranking       │ ───▶ │ OpenRouter: the brief    │
 └──────────────────────────────────────────┘      └──────────────────────────┘
 ```
@@ -75,9 +77,32 @@ Tap **Update** at the top of the app any time to log what you've done. Updates g
 - **Earlier briefs** lists the ones before it. Tap one to read it, swipe one left to delete it, or use **delete all**, which keeps the brief you're reading.
 - **Update**, at the top of every screen, logs what you've done.
 
+## Goals (WOOP)
+
+The Goals tab is for one wish a week, set with **WOOP**: Wish, Outcome, Obstacle, Plan, from Gabriele Oettingen's research on mental contrasting. Picturing success alone tends to sap the drive to act. Picturing it, then naming the obstacle inside you, then deciding what you'll do when it shows up, is what moves people.
+
+1. **Wish:** one specific goal for this week.
+2. **Outcome:** picture the best result, with a 30-second countdown.
+3. **Obstacle:** name what inside you will get in the way, such as fatigue or distraction. It's the loudest step, because it's the one people skip, and you can't save without it.
+4. **Plan:** the app writes "If [obstacle], then I will…" and you finish it.
+
+The flow is always dark, one field per screen, and a clock counts up to five minutes. Then:
+
+- **Daily check-in.** Did you move the wish forward? Did the obstacle show up? Did you follow your plan? A week strip shows each day.
+- **Streaks.** Weeks in a row with a WOOP, your best run, and days in a row with a check-in.
+- **Weekly review.** From Friday, mark the week achieved, partly or missed. Past weeks show how often their plan held, next to your top obstacle and best plan.
+
+With an OpenRouter key, AI helps at two steps. Without one, the same suggestions come from your own history, worked out on the phone:
+
+- **Smart obstacle prediction.** Ranks the obstacles that showed up most in past weeks, recent ones first, and the ones your recent updates mention.
+- **Plan optimization.** Suggests stronger if-then actions, ranked by how often past plans were used when their obstacle showed up.
+- **Contextual reminders.** Your if-then plan arrives as a notification at the time the obstacle tends to hit, such as the evening for fatigue, shifted by your energy peak. A review reminder comes on Sunday evening, and a nudge to set next week's WOOP on Monday morning.
+
+This week's WOOP is also added to the goals each brief reads. How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
+
 ## Settings
 
-- **Goals:** paste them one per line, or as notes. Every brief ranks against them.
+- **Goals:** up to 5 OKRs, written by the AI from your notes. Every brief ranks against them. Your weekly WOOP lives in the Goals tab.
 - **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
 - **Tools:** grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
@@ -227,14 +252,16 @@ Everything you've saved is on the phone, so your briefs, updates, goals and sche
 
 ## Your data
 
-Settings → Your data → "Erase everything on this phone" removes your keys, goals, updates, briefs and schedules from the device, and cancels its reminders. Your tool connections stay in your Composio account. Manage those at [composio.dev](https://composio.dev).
+Settings → Your data → "Erase everything on this phone" removes your keys, goals, WOOPs and check-ins, updates, briefs and schedules from the device, and cancels its reminders. Your tool connections stay in your Composio account. Manage those at [composio.dev](https://composio.dev).
 
 ## Project layout
 
 ```
 app/              Expo app for iOS and Android.
 app/src/core/     What runs a brief: the SQLite store, collectors, Composio and OpenRouter calls, schedules.
-app/src/screens/  The Today, Schedule and Settings screens, and onboarding.
+app/src/screens/  The Today, Goals, Schedule and Settings screens, and onboarding.
+app/src/core/woop.ts  WOOP: weeks, streaks, predictions, plan scores, reminders and AI prompts.
+docs/             Design notes, such as docs/woop.md.
 app/src/ui.tsx    The Lumen theme: colours, fonts and shared controls.
 ```
 
@@ -270,6 +297,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 - One person per phone. Briefs don't sync between devices.
 - No web app. A browser has no safe place to keep your API keys.
 - Scheduled briefs are written when you open the app or its reminder, not in the background.
+- One WOOP a week. WOOP reminders are set for the days ahead each time the app opens, so a phone left closed for over a week gets no reminders until it's opened again.
 - Android builds haven't been tested yet. iOS has.
 - Free models and the default paid model are cheap and can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't yours.
 - Focus, the day plan, scores and noise need an AI model. A plain brief, written without one, lists your goals, your sources and the last brief's note only.
