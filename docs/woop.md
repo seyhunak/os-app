@@ -33,7 +33,7 @@ One WOOP a week, in four steps, each on its own screen. A clock at the top count
 
 ## AI, with history as the fallback
 
-Both AI features use the same OpenRouter path as OKRs: your model first, then `openrouter/free`, with `provider: {data_collection: "deny"}` and reasoning off. Without a key, or when the AI fails, the same screen shows suggestions worked out on the phone from your history, and says why.
+Both AI features use the same OpenRouter path as briefs: your first model, then the rest of the five free models in order, with `provider: {data_collection: "deny"}` and reasoning off. Without a key, or when the AI fails, the same screen shows suggestions worked out on the phone from your history, and says why.
 
 ### Smart obstacle prediction
 
@@ -57,7 +57,26 @@ Local notifications only. Nothing is sent to a server.
 
 ## In your briefs
 
-This week's WOOP is added to your goals as one line, such as "This week's WOOP: Run three times. If I'm too tired after work, then I will put on my shoes.", so Focus and the day plan can lean on it.
+The weekly WOOP is the only goal briefs rank against. Each brief gets it as four lines:
+
+```
+Wish: Run three times this week
+Outcome: Light and proud on Sunday
+Obstacle: I'm too tired after work (fatigue, usually in the evening)
+Plan: If I'm too tired after work, then I will put on my shoes and run for 10 minutes.
+```
+
+The model names the goal by the wish, and when the obstacle's time of day falls in today's plan, it puts the plan's action in that block.
+
+## Goals from before WOOP
+
+Settings used to keep up to 5 OKRs, and onboarding asked you to paste goals. Both are gone. The first time the app opens after the update, those goals move to the Goals tab as **saved wishes**, and briefs stop reading them:
+
+- An OKR becomes its objective ("O: Land a senior role by March" becomes "Land a senior role by March"). Key results are dropped.
+- Pasted notes become one wish per line, without bullets or numbering.
+- Duplicates are merged, and at most 10 are kept.
+
+The wish step of the WOOP flow lists them as one-tap picks, and the Goals tab lists them with a remove button.
 
 ## Data and privacy
 
@@ -70,7 +89,7 @@ This week's WOOP is added to your goals as one line, such as "This week's WOOP: 
 |---|---|
 | [app/src/core/woop.ts](../app/src/core/woop.ts) | The method's logic, with no UI: week math, summaries, streaks, insights, history-based predictions and plans, the if-then sentence, reminder times, and the AI prompts and parsers. |
 | [app/src/core/db.ts](../app/src/core/db.ts) | The `woops` and `woop_checkins` tables. |
-| [app/src/core/os.ts](../app/src/core/os.ts) | The API the screens call: `woop`, `saveWoop`, `checkIn`, `reviewWoop`, `predictObstacles`, `optimizePlan`, `syncWoopReminders`. |
+| [app/src/core/os.ts](../app/src/core/os.ts) | The API the screens call: `woop`, `saveWoop`, `checkIn`, `reviewWoop`, `predictObstacles`, `optimizePlan`, `syncWoopReminders`, `wishes`, `removeWish`, and the one-time move of old goals to saved wishes. |
 | [app/src/WoopFlow.tsx](../app/src/WoopFlow.tsx) | The four-step flow. |
 | [app/src/screens/Goals.tsx](../app/src/screens/Goals.tsx) | The Goals tab: this week, check-in, streaks, review and insights. |
 | [app/src/device.ts](../app/src/device.ts) | Setting the notifications on the phone. |

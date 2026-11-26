@@ -3,8 +3,8 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { endOfWeek, toolkitBySlug } from '../src/core/collectors';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/core/composio';
 import {
-  createOpenRouterComposer, describeComposeError, extractNote, extractSourceSummaries, listOpenRouterModels, modelChain,
-  nearestRecommended, pickFree, renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer,
+  createOpenRouterComposer, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
+  renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer,
 } from '../src/core/compose';
 import type { Kind, Store } from '../src/core/db';
 import { createOs, OsError, type ScheduleInput } from '../src/core/os';
@@ -107,7 +107,9 @@ describe('credentials', () => {
 describe('choosing a model', () => {
   const input: BriefInput = { kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} };
 
-  it('writes with the OpenRouter model you chose', async () => {
+  const [M1, M2, M3, M4, M5] = MODELS;
+
+  it('writes with the model you chose, and only one from the list', async () => {
     const seen: AiConfig[] = [];
     const store = newStore();
     // A setup that was set to Ollama before it was removed goes back to OpenRouter.
@@ -119,145 +121,80 @@ describe('choosing a model', () => {
     });
 
     assert.equal((await os.status()).provider, 'openrouter');
-    await os.saveAi('a/b');
+    like(await os.status(), { model: DEFAULT_MODEL });
+    await os.saveAi(M3);
     await os.generateBrief('morning');
-    assert.deepEqual(seen.at(-1), { provider: 'openrouter', apiKey: 'sk-or-test-key', model: 'a/b' });
-    like(await os.status(), { provider: 'openrouter', model: 'a/b' });
-  });
-
-  it('refuses an empty model', async () => {
-    const { os } = setup();
+    assert.deepEqual(seen.at(-1), { provider: 'openrouter', apiKey: 'sk-or-test-key', model: M3 });
+    await assert.rejects(os.saveAi('qwen/qwen3.7-flash'), /listed models/);
     await assert.rejects(os.saveAi(' '), OsError);
-    await assert.rejects(os.saveAi('x'.repeat(201)), OsError);
   });
 
-  it("lists OpenRouter models cheapest first, leaving out unknown prices and ones that can't write a brief", async () => {
-    stubFetch(async () => json({ data: [
-      { id: 'dear', pricing: { prompt: '0.00001', completion: '0.00003' } },
-      { id: 'cheap', pricing: { prompt: '0.0000001', completion: '0.0000003' } },
-      { id: 'free', pricing: { prompt: '0', completion: '0' } },
-      { id: 'router', pricing: { prompt: '-1', completion: '-1' } },
-      { id: 'tiny', context_length: 8000, pricing: { prompt: '0.0000001', completion: '0.0000001' } },
-      { id: 'painter', architecture: { output_modalities: ['image'] }, pricing: { prompt: '0.0000001', completion: '0.0000001' } },
-    ] }));
-    const models = await listOpenRouterModels('k');
-    assert.deepEqual(models.map((m) => m.id), ['free', 'cheap', 'dear']);
-    assert.match(models[0]!.note!, /Free/);
-    assert.equal(models[2]!.note, '$10.00 in, $30.00 out, per million tokens');
+  it('puts a model saved before the list, such as a paid one, back on the default', async () => {
+    const { os, store } = setup();
+    store.setSetting('ai_model_openrouter', 'qwen/qwen3.7-flash');
+    assert.equal((await os.status()).model, 'nvidia/nemotron-3-ultra-550b-a55b:free');
   });
 
-  it('recommends the cheapest capable model from each trusted lab', async () => {
-    const at = (id: string, perMillion: number, extra = {}) => ({ id, pricing: { prompt: String(perMillion / 2e6), completion: String(perMillion / 2e6) }, ...extra });
-    stubFetch(async () => json({ data: [
-      at('meta-llama/llama-3.1-8b-instruct', 0.06),
-      at('openai/gpt-oss-20b:batch', 0.1),
-      at('openai/gpt-oss-20b', 0.11),
-      at('qwen/qwen3-coder-30b-a3b-instruct', 0.2),
-      at('qwen/qwen3-30b-a3b-instruct-2507', 0.39),
-      at('meta-llama/llama-4-scout', 0.4),
-      at('openai/gpt-5-nano', 0.45),
-      at('qwen/qwen3-235b-a22b-2507', 0.64),
-      at('google/lyria-3-pro-preview', 0.5, { architecture: { output_modalities: ['text', 'audio'] } }),
-      at('~google/gemini-flash-latest', 0.6),
-      at('google/gemini-2.5-flash', 2.8),
-      at('openai/gpt-5', 11.25),
-      at('qwen/qwen3-30b-a3b:free', 0),
-      at('unknown/maker-70b', 0.1),
-    ] }));
-    const models = await listOpenRouterModels('k');
-    assert.deepEqual(nearestRecommended(models.filter((m) => m.recommended), 'meta-llama/llama-4-scout'), ['qwen/qwen3-30b-a3b-instruct-2507', 'openai/gpt-oss-20b', 'google/gemini-2.5-flash']);
-    assert.deepEqual(models.filter((m) => m.recommended).map((m) => m.id), ['openai/gpt-oss-20b', 'qwen/qwen3-30b-a3b-instruct-2507', 'meta-llama/llama-4-scout', 'google/gemini-2.5-flash']);
-    assert.ok(!models.map((m) => m.id).includes('openai/gpt-oss-20b:batch'));
-    assert.ok(!models.map((m) => m.id).includes('google/lyria-3-pro-preview'));
-    assert.deepEqual(models.map((m) => m.price), [...models.map((m) => m.price)].sort((a, b) => a - b));
+  it('offers the five free models in fallback order, with no key needed and no network', async () => {
+    const { os } = setup();
+    const { models, error } = await os.aiModels();
+    assert.equal(error, null);
+    assert.deepEqual(models.map((m) => m.id), [
+      'nvidia/nemotron-3-ultra-550b-a55b:free',
+      'nvidia/nemotron-3.5-super-vl:free',
+      'nvidia/nemotron-3.5-lightning:free',
+      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
+      'baidu/ernie-5.5-flash-preview:free',
+    ]);
+    assert.deepEqual(models.map((m) => m.note), ['Default', 'Fallback 1', 'Fallback 2', 'Fallback 3', 'Fallback 4']);
   });
 
-  it('tries free models first, then yours, then paid fallbacks, and names the one that wrote it', async () => {
+  it('orders the chain: your model, then the rest of the list in order, never anything else', () => {
+    assert.deepEqual(modelChain(M1!), [...MODELS]);
+    assert.deepEqual(modelChain(M3!), [M3, M1, M2, M4, M5]);
+    assert.deepEqual(modelChain('qwen/qwen3.7-flash'), [...MODELS]);
+  });
+
+  it('falls down the list when a model is busy, and names the fallback that wrote it', async () => {
     const tried: string[] = [];
     stubFetch(async (_url, init) => {
       const { model } = JSON.parse(String(init?.body)) as { model: string };
       tried.push(model);
-      if (model === 'google/gemma-4-31b-it:free') return json({ error: { code: 429, message: 'temporarily rate-limited upstream' } }, 429);
-      return json({ model: 'baidu/ernie-5.5-flash-preview:free', choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] });
+      if (model === M1) return json({ error: { code: 429, message: 'temporarily rate-limited upstream' } }, 429);
+      return json({ choices: [{ finish_reason: 'stop', message: { content: '# Good evening\n\nBody' } }] });
     });
-    const compose = createOpenRouterComposer('k', 'qwen/qwen3.7-flash', { freeModels: async () => ['google/gemma-4-31b-it:free', 'baidu/ernie-5.5-flash-preview:free', 'openrouter/free'], fallbacks: async () => ['deepseek/deepseek-v4-flash'] });
-    const text = await compose(input);
-    assert.deepEqual(tried, ['google/gemma-4-31b-it:free', 'baidu/ernie-5.5-flash-preview:free']);
-    assert.equal(text, '# Good evening\n\n> Written by baidu/ernie-5.5-flash-preview:free, a free model.\n\nBody');
+    const text = await createOpenRouterComposer('k', M1!)(input);
+    assert.deepEqual(tried, [M1, M2]);
+    assert.equal(text, "# Good evening\n\n> Written by nvidia/nemotron-3.5-super-vl:free, a fallback, because nemotron-3-ultra-550b-a55b couldn't write it.\n\nBody");
   });
 
-  it('orders the chain: named free models, the free router, yours, then two paid fallbacks', () => {
-    assert.deepEqual(modelChain('a/one', ['f/x:free', 'openrouter/free', 'f/y:free'], ['a/one', 'b/two', 'c/three', 'd/four']), ['f/x:free', 'f/y:free', 'openrouter/free', 'a/one', 'b/two', 'c/three']);
-    assert.deepEqual(modelChain('a/one', [], []), ['openrouter/free', 'a/one']);
-  });
-
-  it('picks free general models, trusted labs first, and leaves out code, tiny and paid ones', () => {
-    assert.deepEqual(pickFree(['cohere/north-mini-code:free', 'baidu/ernie-5.5-flash-preview:free', 'google/gemma-4-31b-it:free', 'meta-llama/llama-3.2-3b-instruct:free', 'qwen/qwen3.7-flash', 'openrouter/free']), ['google/gemma-4-31b-it:free', 'baidu/ernie-5.5-flash-preview:free', 'openrouter/free']);
-  });
-
-  it('falls to your paid model when every free one is busy, then reports the paid failure', async () => {
+  it('reports the failure that says most when every model fails', async () => {
     const tried: string[] = [];
     stubFetch(async (_url, init) => {
       const { model } = JSON.parse(String(init?.body)) as { model: string };
       tried.push(model);
-      return model.endsWith('free')
-        ? json({ error: { code: 429, message: 'busy' } }, 429)
-        : json({ error: { code: 402, message: 'This request requires more credits' } }, 402);
+      return model === M4 ? json({ error: { code: 404, message: 'Model blocked by guardrail' } }, 404) : json({ error: { code: 429, message: 'busy' } }, 429);
     });
     const waits: number[] = [];
-    const error = await createOpenRouterComposer('k', 'm', { freeModels: async () => ['f/x:free'], fallbacks: async () => ['p/two'], sleep: async (ms) => { waits.push(ms); } })(input).catch((e) => e);
-    assert.deepEqual(tried, ['f/x:free', 'openrouter/free', 'm', 'p/two']);
+    const error = await createOpenRouterComposer('k', M1!, { sleep: async (ms) => { waits.push(ms); } })(input).catch((e) => e);
+    assert.deepEqual(tried, [...MODELS]);
     assert.deepEqual(waits, []);
-    assert.equal(describeComposeError(error), 'the free models were busy or unavailable, and the OpenRouter key is out of credit or over its budget for paid models');
+    assert.equal(describeComposeError(error), "every model on the list was busy or unavailable, and your OpenRouter guardrail doesn't allow this model");
   });
 
   it('goes round once more when every model was only busy, and never retries a rejected key', async () => {
     let calls = 0;
     stubFetch(async () => { calls++; return json({ error: { code: 429, message: 'busy' } }, 429); });
-    const error = await createOpenRouterComposer('k', 'm', { sleep: async () => undefined })(input).catch((e) => e);
+    const error = await createOpenRouterComposer('k', M1!, { sleep: async () => undefined })(input).catch((e) => e);
     mock.restoreAll();
-    assert.equal(calls, 4);
+    assert.equal(calls, 10);
     assert.match(describeComposeError(error), /rate limiting/);
     calls = 0;
     stubFetch(async () => { calls++; return json({ error: { code: 401, message: 'no' } }, 401); });
-    await createOpenRouterComposer('k', 'm', { sleep: async () => undefined })(input).catch(() => undefined);
+    await createOpenRouterComposer('k', M1!, { sleep: async () => undefined })(input).catch(() => undefined);
     assert.equal(calls, 1);
   });
 
-  it('asks for a key before listing OpenRouter models', async () => {
-    const { os } = setup();
-    const result = await os.aiModels();
-    assert.deepEqual(result.models, []);
-    assert.match(result.error!, /key/);
-  });
-
-  it('lists models through the listModels dep once a key is saved, and remembers the free ones', async () => {
-    const store = newStore();
-    const os = createOs({
-      store, createGateway: () => fakeGateway().gateway, now: () => NOW,
-      listModels: async (key) => {
-        assert.equal(key, 'sk-or-test-key');
-        return [
-          { id: 'google/gemma-4-31b-it:free', price: 0, note: 'Free', recommended: false },
-          { id: 'openai/gpt-oss-20b', price: 0.11, note: 'cheap', recommended: true },
-        ];
-      },
-    });
-    await os.saveOpenRouterKey('sk-or-test-key');
-    const result = await os.aiModels();
-    assert.equal(result.error, null);
-    assert.equal(result.models.length, 2);
-    assert.deepEqual(JSON.parse(store.getSetting('free_models')!), ['google/gemma-4-31b-it:free']);
-    assert.deepEqual(JSON.parse(store.getSetting('recommended_models')!), [{ id: 'openai/gpt-oss-20b', price: 0.11 }]);
-  });
-
-  it("says so when OpenRouter can't list your models", async () => {
-    const os = createOs({ store: newStore(), createGateway: () => fakeGateway().gateway, listModels: async () => { throw new Error('down'); } });
-    await os.saveOpenRouterKey('sk-or-test-key');
-    const result = await os.aiModels();
-    assert.deepEqual(result.models, []);
-    assert.match(result.error!, /type a model name/);
-  });
 });
 
 describe('toolkits', () => {
@@ -654,30 +591,24 @@ describe('OpenRouter', () => {
 
   it('sends no tools, caps output, skips data-collecting providers, and strips reasoning', async () => {
     const fetchMock = reply({ choices: [{ finish_reason: 'stop', message: { content: '<think>hmm</think># Good morning' } }] });
-    assert.equal(await createOpenRouterComposer('sk-or-x', 'some/model')(input), '> Written by openrouter/free, a free model.\n\n# Good morning');
+    assert.equal(await createOpenRouterComposer('sk-or-x', MODELS[0])(input), '# Good morning');
     const body = JSON.parse(String((fetchMock.mock.calls[0]!.arguments[1] as RequestInit).body));
-    like(body, { model: 'openrouter/free', max_tokens: 5000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
+    like(body, { model: MODELS[0], max_tokens: 5000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
     assert.equal(body.tools, undefined);
   });
 
-  it("asks a model that can't turn thinking off for low effort, and gives a free one room to finish", async () => {
+  it("asks a model that can't turn thinking off for low effort, and gives it room to finish", async () => {
     const bodies: Array<{ model: string; reasoning: unknown; max_tokens: number }> = [];
     stubFetch(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       bodies.push(body);
       if (body.reasoning.enabled === false) return json({ error: { code: 400, message: 'Reasoning is mandatory for this endpoint and cannot be disabled.' } }, 400);
-      return body.model.endsWith('free')
-        ? json({ choices: [{ finish_reason: 'length', message: { content: '' } }] })
-        : json({ model: body.model, choices: [{ finish_reason: 'stop', message: { content: '# Good morning' } }] });
+      return json({ choices: [{ finish_reason: 'stop', message: { content: '# Good morning' } }] });
     });
-    assert.equal(await createOpenRouterComposer('k', 'paid/m', { freeModels: async () => ['f/x:free'] })(input), '# Good morning');
+    assert.equal(await createOpenRouterComposer('k', MODELS[3])(input), '# Good morning');
     assert.deepEqual(bodies.map((b) => [b.model, b.reasoning, b.max_tokens]), [
-      ['f/x:free', { enabled: false }, 5000],
-      ['f/x:free', { effort: 'low', exclude: true }, 12000],
-      ['openrouter/free', { enabled: false }, 5000],
-      ['openrouter/free', { effort: 'low', exclude: true }, 12000],
-      ['paid/m', { enabled: false }, 5000],
-      ['paid/m', { effort: 'low', exclude: true }, 5000],
+      [MODELS[3], { enabled: false }, 5000],
+      [MODELS[3], { effort: 'low', exclude: true }, 12000],
     ]);
   });
 
@@ -792,7 +723,7 @@ describe('ledger', () => {
 
   it('shows updates in a digest too', async () => {
     const { os } = await connected();
-    await os.saveGoals('Ship the beta');
+    await os.saveWoop({ wish: 'Ship the beta', outcome: '', obstacle: 'I polish forever', obstacleTag: 'perfectionism', cue: 'afternoon', plan: 'ship the rough version' });
     await os.addUpdate('Fixed the login bug');
     const { markdown } = await os.generateBrief('morning');
     assert.ok(markdown.includes('- ⚪ Ship the beta'));
@@ -808,14 +739,6 @@ describe('ledger', () => {
 });
 
 describe('goals and timezone', () => {
-  it('saves goals, and refuses very long ones', async () => {
-    const { os } = setup();
-    assert.deepEqual(await os.goals(), { goals: '' });
-    await os.saveGoals('Ship the beta');
-    assert.deepEqual(await os.goals(), { goals: 'Ship the beta' });
-    await assert.rejects(os.saveGoals('x'.repeat(20_001)), OsError);
-  });
-
   it('saves a known timezone and writes briefs in it', async () => {
     const { os, store } = await connected();
     await assert.rejects(os.saveTimezone('Mars/Base'), OsError);

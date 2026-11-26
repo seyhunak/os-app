@@ -20,10 +20,13 @@ export function GoalsScreen({ api }: { api: Api }) {
   const [view, setView] = useState<WoopView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flow, setFlow] = useState<'new' | 'edit' | null>(null);
+  const [wishes, setWishes] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
-      setView(await api.woop());
+      const [next, saved] = await Promise.all([api.woop(), api.wishes()]);
+      setView(next);
+      setWishes(saved.wishes);
       setError(null);
     } catch (e) {
       setError(message(e));
@@ -40,7 +43,7 @@ export function GoalsScreen({ api }: { api: Api }) {
 
   return (
     <Screen>
-      <WoopFlow api={api} visible={flow !== null} editing={flow === 'edit' ? current?.woop ?? null : null} onClose={() => setFlow(null)} onSaved={() => void load()} />
+      <WoopFlow api={api} visible={flow !== null} editing={flow === 'edit' ? current?.woop ?? null : null} wishes={wishes} onClose={() => setFlow(null)} onSaved={() => void load()} />
       <ErrorNote message={error} />
 
       {unreviewed ? <ReviewCard api={api} week={unreviewed} title="how did last week go?" onDone={load} /> : null}
@@ -71,6 +74,8 @@ export function GoalsScreen({ api }: { api: Api }) {
           {!past.length ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14 }}>Past weeks show up here, with how often your plan held.</Text> : null}
         </View>
       ) : null}
+
+      {wishes.length ? <SavedWishes api={api} wishes={wishes} onChange={setWishes} /> : null}
     </Screen>
   );
 }
@@ -289,6 +294,35 @@ function PastWeek({ week }: { week: WeekSummary }) {
         {`${TAG_LABEL[woop.obstacleTag]} · showed up ${week.obstacleHits} · plan held ${pct(week.planRate)}`}
       </Text>
       {woop.reviewNote ? <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 14, lineHeight: 20 }}>{woop.reviewNote}</Text> : null}
+    </View>
+  );
+}
+
+/** Your goals from before WOOP, kept as wishes to pick from. Remove the ones you're done with. */
+function SavedWishes({ api, wishes, onChange }: { api: Api; wishes: string[]; onChange(wishes: string[]): void }) {
+  const c = useColors();
+  const [error, setError] = useState<string | null>(null);
+  const remove = async (i: number) => {
+    try {
+      onChange((await api.removeWish(i)).wishes);
+      setError(null);
+    } catch (e) {
+      setError(message(e));
+    }
+  };
+  return (
+    <View style={{ gap: 10 }}>
+      <Text accessibilityRole="header" style={{ color: c.text, ...display, fontSize: 30, lineHeight: 32 }}>saved wishes</Text>
+      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 14, lineHeight: 20 }}>Your earlier goals. Pick one as a week's wish when you start a WOOP.</Text>
+      {wishes.map((w, i) => (
+        <View key={w} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, borderTopWidth: 1, borderColor: c.line, paddingTop: 8 }}>
+          <Text style={{ flex: 1, color: c.text, fontFamily: F.text, fontSize: 16, lineHeight: 22 }}>{w}</Text>
+          <Pressable accessibilityRole="button" accessibilityLabel={`Remove saved wish: ${w}`} onPress={() => void remove(i)} style={{ minHeight: 44, justifyContent: 'center' }}>
+            <Text style={{ color: c.muted, fontFamily: F.sansMedium, fontSize: 14 }}>remove</Text>
+          </Pressable>
+        </View>
+      ))}
+      <ErrorNote message={error} />
     </View>
   );
 }

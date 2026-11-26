@@ -452,5 +452,25 @@ export function suggestPlans(config: Pick<AiConfig, 'apiKey' | 'model'>, ctx: Pl
   });
 }
 
-/** This week's WOOP as one line for the brief, so Focus and the day plan can lean on it. */
-export const woopForBrief = (woop: Woop | null) => (woop ? `This week's WOOP: ${woop.wish}. ${ifThen(woop.obstacle, woop.plan)}` : '');
+/** This week's WOOP as the brief's goal: the wish to rank against, and the plan for when its obstacle shows up. */
+export const woopForBrief = (woop: Woop | null) => (woop
+  ? [`Wish: ${woop.wish}`, ...(woop.outcome ? [`Outcome: ${woop.outcome}`] : []), `Obstacle: ${woop.obstacle} (${woop.obstacleTag}, usually in the ${woop.cue})`, `Plan: ${ifThen(woop.obstacle, woop.plan)}`].join('\n')
+  : '');
+
+/** The most saved wishes kept, so the list stays a short menu. */
+export const MAX_WISHES = 10;
+
+/**
+ * Turns goals from before WOOP into saved wishes: an OKR becomes its objective, and pasted notes
+ * become one wish per line. Key results, bullets and blank lines are dropped.
+ */
+export function wishesFromGoals(goals: string[]): string[] {
+  const out: string[] = [];
+  for (const goal of goals) {
+    const lines = goal.split('\n').map((l) => l.replace(/^\s*(?:[-*•]|\d+[.)])\s*/, '').trim()).filter(Boolean);
+    const objective = lines.find((l) => /^(?:O|Objective)\s*\d*\s*[:.)-]/i.test(l));
+    const picked = objective ? [objective] : lines.filter((l) => !/^(?:KR|Key result)\s*\d*\s*[:.)-]/i.test(l));
+    for (const line of picked) out.push(line.replace(/^(?:O|Objective)\s*\d*\s*[:.)-]\s*/i, '').slice(0, LIMITS.wish).trim());
+  }
+  return [...new Map(out.filter(Boolean).map((w) => [w.toLowerCase(), w])).values()];
+}

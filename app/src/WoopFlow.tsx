@@ -17,17 +17,17 @@ const clock = (s: number) => `${String(Math.floor(s / 60)).padStart(2, '0')}:${S
  * The four WOOP steps, one screen each, in under five minutes. Always dark, one input per step,
  * and the return key moves on. The obstacle step is the loud one, because it's the one people skip.
  */
-export function WoopFlow({ api, visible, editing, onClose, onSaved }: { api: Api; visible: boolean; editing: Woop | null; onClose(): void; onSaved(): void }) {
+export function WoopFlow({ api, visible, editing, wishes, onClose, onSaved }: { api: Api; visible: boolean; editing: Woop | null; wishes: string[]; onClose(): void; onSaved(): void }) {
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       <DarkTheme>
-        {visible ? <Flow api={api} editing={editing} onClose={onClose} onSaved={onSaved} /> : null}
+        {visible ? <Flow api={api} editing={editing} wishes={wishes} onClose={onClose} onSaved={onSaved} /> : null}
       </DarkTheme>
     </Modal>
   );
 }
 
-function Flow({ api, editing, onClose, onSaved }: { api: Api; editing: Woop | null; onClose(): void; onSaved(): void }) {
+function Flow({ api, editing, wishes, onClose, onSaved }: { api: Api; editing: Woop | null; wishes: string[]; onClose(): void; onSaved(): void }) {
   const c = useColors();
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState(0);
@@ -137,6 +137,12 @@ function Flow({ api, editing, onClose, onSaved }: { api: Api; editing: Woop | nu
             <Head eyebrow="w · wish" title="what do you want this week?" />
             <Hint>One goal, specific and within reach in seven days. Challenging, but doable.</Hint>
             {input(wish, setWish, LIMITS.wish, 'Run three times before Sunday', 'Your wish')}
+            {wishes.length ? (
+              <View style={{ gap: 8 }}>
+                <Label>Or pick a saved wish</Label>
+                {wishes.map((w) => <Suggestion key={w} title={w} selected={wish === w} onPress={() => setWish(w)} />)}
+              </View>
+            ) : null}
           </>
         ) : null}
 
@@ -239,18 +245,18 @@ function Label({ children }: { children: string }) {
   return <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 14 }}>{children}</Text>;
 }
 
-function Suggestion({ title, detail, selected, onPress }: { title: string; detail: string; selected: boolean; onPress(): void }) {
+function Suggestion({ title, detail, selected, onPress }: { title: string; detail?: string; selected: boolean; onPress(): void }) {
   const c = useColors();
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Use: ${title}. ${detail}`}
+      accessibilityLabel={`Use: ${title}${detail ? `. ${detail}` : ''}`}
       accessibilityState={{ selected }}
       onPress={onPress}
       style={({ pressed }) => ({ borderWidth: 1, borderColor: selected ? c.accent : c.line2, backgroundColor: pressed ? c.deep : c.card, borderRadius: R.control, padding: 12, gap: 4 })}
     >
       <Text style={{ color: c.text, fontFamily: F.text, fontSize: 16, lineHeight: 22 }}>{title}</Text>
-      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12, lineHeight: 16 }}>{detail}</Text>
+      {detail ? <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 12, lineHeight: 16 }}>{detail}</Text> : null}
     </Pressable>
   );
 }

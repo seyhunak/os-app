@@ -64,7 +64,7 @@ cd app && npx expo run:android --variant release
 
 1. **Composio.** Paste your Composio API key. It's checked with Composio, then kept in the phone's Keychain or Keystore.
 2. **Tools.** Choose what your brief reads, and connect each tool through Composio. Tools are grouped by category, A to Z, and only the ones you tick are read.
-3. **First brief.** Paste your goals and, optionally, an OpenRouter key, then write your first brief.
+3. **First brief.** Add an OpenRouter key if you have one, then write your first brief. Then set this week's goal in the Goals tab, with WOOP.
 4. **Schedule.** Add a schedule and allow notifications. At each time, the phone reminds you, and the brief is written when you open it. See [Schedules](README.md#schedules).
 
 ## Turning off the old Mac server
