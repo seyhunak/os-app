@@ -9,7 +9,7 @@
 
 A short daily brief from your own tools: what matters, what to drop, and what to do next.
 
-OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses five free AI models through [OpenRouter](https://openrouter.ai), each one a fallback for the one before, to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
+OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses OpenRouter's free AI models, found fresh before each brief and tried best first, through [OpenRouter](https://openrouter.ai), to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
@@ -37,7 +37,7 @@ Its **Goals** tab adds [WOOP](#goals-woop), a research-backed way to turn one we
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** 23 tools in 8 categories, from Gmail and Google Calendar to Jira, Salesforce and Hacker News (see [What gets read](#what-gets-read-and-where-it-goes)). Only the tools you select are read; the rest are skipped, even if they're connected in Composio.
-3. **Get a brief.** An AI model picks the 3 things to do first, scores each item against this week's goal, set in the Goals tab, and drops the noise. Choose which of the five free models goes first in Settings. Without a key, you get a plain summary of what was read, with no focus, scores or noise.
+3. **Get a brief.** An AI model picks the 3 things to do first, scores each item against this week's goal, set in the Goals tab, and drops the noise. Choose which free model goes first in Settings. Without a key, you get a plain summary of what was read, with no focus, scores or noise.
 4. **Set your goal.** In the Goals tab, write this week's WOOP: a wish, its best outcome, the obstacle inside you, and an if-then plan. Every brief ranks against it.
 5. **Choose a schedule.** Pick morning, afternoon, evening or night briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
 
@@ -110,7 +110,7 @@ How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
 - **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
 - **Tools:** grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
-- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and which of the five free models goes first. Once set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).
+- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and which of today's free models goes first. Once set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).
 - **Your data:** what the app stores, and the button that erases it. See [Your data](#your-data).
 
 ## Design
@@ -215,29 +215,26 @@ Each schedule has a kind (morning, afternoon, evening or night), a time and the 
 
 OS uses [OpenRouter](https://openrouter.ai) only. Ollama was removed, since its cloud models are no longer free and a local model is too slow for a brief on most machines.
 
-OS uses only these five free models, in this order. The first is the default, and each one below is the fallback for the one above:
+OS uses only free models, and asks OpenRouter which ones are free before every brief, so a model OpenRouter adds or drops is picked up on its own. Before any of your data is sent, a brief does this, in order, and the progress view shows each step:
 
-1. `nvidia/nemotron-3-ultra-550b-a55b:free`
-2. `nvidia/nemotron-3.5-super-vl:free`
-3. `nvidia/nemotron-3.5-lightning:free`
-4. `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`
-5. `baidu/ernie-5.5-flash-preview:free`
+1. **Checks your key** (`GET /key`). A rejected or unreachable key stops here.
+2. **Finds today's free models** (`GET /models`, which is public, so nothing of yours is sent). It keeps text models that cost nothing, take at least 32,000 tokens of context, accept `max_tokens`, haven't expired, and aren't tiny (under 7B, by the size in the id). The list is kept on the phone, so if OpenRouter's list can't be read, the last one is used, then the five models OS shipped with.
+3. **Ranks them, best first.** Models that can stop thinking come first, since thinking spends the room the brief needs. Then the biggest, by the size in the id, then the newest. Your choice in Settings goes first while it's still free. OpenRouter's `openrouter/free` router goes last, as the final fallback.
+4. **Tests them in order.** Each test is a tiny "Reply with OK" request with nothing of yours in it. The first model that answers writes the brief, and the ones after it are its fallbacks, up to six in all. At most five models are tested.
+5. **Privacy first, then logging as a fallback.** Tests and briefs first ask for providers that don't keep or train on prompts (`provider: {data_collection: "deny"}`). Many free providers do keep prompts, and OpenRouter answers those with a 404. Only if no privacy-safe provider answers, or every one then fails to write the brief, does OS try free providers that may keep prompts. A brief written that way says so at the top. Your tool data is redacted either way.
 
-Go to **Settings → Model**, paste your OpenRouter key once, and tap a model to put it first. The others keep their order behind it. Briefs and the WOOP suggestions use the same list. No other model is ever called: no paid models, and not OpenRouter's `openrouter/free` router. The list is `MODELS` in [app/src/core/compose.ts](app/src/core/compose.ts). A model saved before the list, such as a paid one, is replaced by the default.
+Go to **Settings → Model**, paste your OpenRouter key once, and tap a model to put it first. Settings shows today's list from OpenRouter. The WOOP suggestions use the last list a brief or Settings found. The code is in [app/src/core/models.ts](app/src/core/models.ts).
 
 How the list behaves:
 
-- **Checked in order before anything is sent.** Each brief first checks your OpenRouter key (`GET /key`), then each model in your order (`GET /models/{id}/endpoints`), and the progress view shows each check. A rejected or unreachable key stops there, before any tool data leaves the phone. A model OpenRouter no longer lists, or has no provider for, is skipped. A model whose check fails for some other reason stays in, because the check itself may be what broke. These checks aren't model requests, so they don't count against the free daily limit.
-- **There is always a brief.** If the key, every model or the AI setup fails, you get an unranked digest of what was read, with the reason at the top.
-- **Busy models are skipped at once.** A rate-limited, overloaded, slow or failed model hands over to the next one, with no wait. An answer that runs out of tokens, comes back empty, or is cut off partway (`finish_reason: "error"`) counts as a failure too.
+- **Each model is asked the way it needs.** OpenRouter says which models think by default and which can't stop. Thinking is turned off where it can be (`reasoning: {effort: "none"}` or `{enabled: false}`), with 5,000 tokens for the brief. A model that must think is asked for its lightest effort, kept out of the answer, with 16,000 tokens. A model that runs out of room gets one more go that way before the next model is tried.
+- **An unranked digest is the last resort.** You get one only if the key is rejected, OpenRouter can't be reached, or no free model writes the brief, even through providers that may keep prompts. The reason is at the top.
+- **Busy models are skipped at once.** A rate-limited, overloaded, slow or failed model hands over to the next one, with no wait. An answer that runs out of tokens twice, comes back empty, or is cut off partway (`finish_reason: "error"`) counts as a failure too.
 - **One more pass when everything was only busy.** If every model was just rate limited, OS waits 3 seconds and goes down the list once more. If anything else went wrong, it doesn't go round again.
 - **Some failures stop it at once.** A rejected key, or a guardrail that flags prompt injection, would fail the same way on every model, so nothing else is tried.
-- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 5,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked for low effort and to keep it out of the answer, and get 12,000 output tokens to finish in.
 - **Works with no credit.** Free models work on a key whose account has a $0 balance.
-- **Free models have a daily limit.** OpenRouter allows 50 free requests a day on accounts that haven't bought credits. One brief uses up to five, and twice that if it goes round a second time.
-- **The same privacy rules apply.** Every request asks for providers that don't keep or train on prompts (`provider: {data_collection: "deny"}`).
+- **Free models have a daily limit.** OpenRouter allows 50 free requests a day on accounts that haven't bought credits. One brief uses one test request plus one per model asked, usually two. A bad day can take more: up to ten tests and six models, twice if every model was busy.
 - **You can see who wrote it.** A brief written by a fallback says so under its title, such as "Written by nvidia/nemotron-3.5-super-vl:free, a fallback, because nemotron-3-ultra-550b-a55b couldn't write it."
-- **The reason is given when every model fails.** You get a plain brief that says why, such as "every model on the list was busy or unavailable, and the model's provider is rate limiting it."
 
 ## Offline
 

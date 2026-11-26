@@ -85,7 +85,7 @@ function DataSection({ api, onErased }: { api: Api; onErased(): void }) {
   );
 }
 
-/** Your OpenRouter key, and which of the five free models goes first. The rest are fallbacks, in order. */
+/** Your OpenRouter key, and which of today's free models goes first. The rest are fallbacks, best first. */
 function ModelSection({ api, status, onChanged }: { api: Api; status: Status; onChanged(): void }) {
   const c = useColors();
   const savedModel = status.openrouterModel ?? status.model ?? '';
@@ -94,7 +94,7 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    api.aiModels().then((r) => setOptions(r.models), (e) => setError(message(e)));
+    api.aiModels().then((r) => { setOptions(r.models); setError(r.error); }, (e) => setError(message(e)));
   }, [api]);
 
   const choose = async (id: string) => {
@@ -111,7 +111,7 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
     }
   };
 
-  // The saved one first, then the rest in list order: the order each brief tries them.
+  // The saved one first, then the rest best first: the order each brief tests them.
   const ordered = [...options.filter((o) => o.id === savedModel), ...options.filter((o) => o.id !== savedModel)];
   return (
     <View style={{ gap: 10 }}>
@@ -126,7 +126,7 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
         onRemove={() => api.removeCredential('openrouter').then(onChanged)}
       />
       <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
-        OS uses only these free models. The first writes each brief; if it's busy or fails, the next one down is tried. Tap one to put it first.
+        These are today's free models on OpenRouter, best first. Before each brief OS asks OpenRouter again, tests the first one, and moves down the list until one answers. Tap one to put it first.
       </Text>
       <View style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
         {ordered.map((option, i) => (

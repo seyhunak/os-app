@@ -3,12 +3,13 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { endOfWeek, toolkitBySlug } from '../src/core/collectors';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/core/composio';
 import {
-  checkOpenRouter, createComposer, createOpenRouterComposer, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
+  createComposer, createOpenRouterComposer, LOGGING_NOTICE, prepareModels, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
   renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer, type ProgressStep,
 } from '../src/core/compose';
 import type { Kind, Store } from '../src/core/db';
 import { createOs, OsError, type ScheduleInput } from '../src/core/os';
 import { redact } from '../src/core/redact';
+import { freeModelsFrom, rankFreeModels, type FreeModel } from '../src/core/models';
 import { memoryStore } from './helpers';
 
 const NOW = new Date('2026-11-06T06:00:00Z');
@@ -71,6 +72,24 @@ const stubFetch = (impl: (url: unknown, init?: RequestInit) => Promise<Response>
 
 afterEach(() => mock.restoreAll());
 
+const entry = (id: string, extra: Record<string, unknown> = {}) => ({
+  id, created: 1_790_000_000, context_length: 128_000, pricing: { prompt: '0', completion: '0' },
+  architecture: { input_modalities: ['text'], output_modalities: ['text'] }, top_provider: { max_completion_tokens: 32_768 },
+  supported_parameters: ['max_tokens', 'reasoning'], reasoning: { mandatory: false }, ...extra,
+});
+/** A small OpenRouter catalog: four usable free models, and five that aren't. */
+const CATALOG = [
+  entry('acme/mid-30b:free'),
+  entry('acme/big-120b:free'),
+  entry('acme/new:free', { created: 1_795_000_000 }),
+  entry('acme/thinker-200b:free', { reasoning: { mandatory: true, supported_efforts: ['high'] } }),
+  entry('acme/tiny-1.7b:free'),
+  entry('acme/paid-70b', { pricing: { prompt: '0.0000002', completion: '0.0000006' } }),
+  entry('acme/singer:free', { architecture: { input_modalities: ['text'], output_modalities: ['text', 'audio'] } }),
+  entry('acme/short-70b:free', { context_length: 8_192 }),
+  entry('openrouter/free'),
+];
+
 describe('credentials', () => {
   it('stores keys as secrets and never returns them', async () => {
     const { os, store } = setup();
@@ -124,7 +143,7 @@ describe('choosing a model', () => {
     like(await os.status(), { model: DEFAULT_MODEL });
     await os.saveAi(M3);
     await os.generateBrief('morning');
-    assert.deepEqual(seen.at(-1), { provider: 'openrouter', apiKey: 'sk-or-test-key', model: M3 });
+    like(seen.at(-1), { provider: 'openrouter', apiKey: 'sk-or-test-key', model: M3 });
     await assert.rejects(os.saveAi('qwen/qwen3.7-flash'), /listed models/);
     await assert.rejects(os.saveAi(' '), OsError);
   });
@@ -135,18 +154,27 @@ describe('choosing a model', () => {
     assert.equal((await os.status()).model, 'nvidia/nemotron-3-ultra-550b-a55b:free');
   });
 
-  it('offers the five free models in fallback order, with no key needed and no network', async () => {
-    const { os } = setup();
-    const { models, error } = await os.aiModels();
-    assert.equal(error, null);
-    assert.deepEqual(models.map((m) => m.id), [
-      'nvidia/nemotron-3-ultra-550b-a55b:free',
-      'nvidia/nemotron-3.5-super-vl:free',
-      'nvidia/nemotron-3.5-lightning:free',
-      'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
-      'baidu/ernie-5.5-flash-preview:free',
-    ]);
-    assert.deepEqual(models.map((m) => m.note), ['Default', 'Fallback 1', 'Fallback 2', 'Fallback 3', 'Fallback 4']);
+  it("offers today's free models from OpenRouter, best first, and the built-in list when it can't be reached", async () => {
+    const { os, store } = setup();
+    stubFetch(async (url) => {
+      assert.equal(String(url), 'https://openrouter.ai/api/v1/models');
+      return json({ data: CATALOG });
+    });
+    const fresh = await os.aiModels();
+    assert.equal(fresh.error, null);
+    assert.deepEqual(fresh.models.map((m) => m.id), ['acme/big-120b:free', 'acme/mid-30b:free', 'acme/new:free', 'acme/thinker-200b:free']);
+    assert.deepEqual(fresh.models.map((m) => m.note), ['Used first', 'Fallback 1', 'Fallback 2', 'Fallback 3']);
+    // Choosing one from today's list puts it first, and one that isn't on it is refused.
+    await os.saveAi('acme/new:free');
+    assert.equal((await os.status()).model, 'acme/new:free');
+    await assert.rejects(os.saveAi(M1!), /listed models/);
+    mock.restoreAll();
+    stubFetch(async () => { throw new TypeError('Network request failed'); });
+    const kept = await os.aiModels();
+    assert.match(kept.error!, /the last list/);
+    assert.equal(kept.models[0]!.id, 'acme/new:free');
+    store.deleteSetting('openrouter_free_models');
+    assert.deepEqual((await os.aiModels()).models.map((m) => m.id).sort(), [...MODELS].sort());
   });
 
   it('orders the chain: your model, then the rest of the list in order, never anything else', () => {
@@ -197,57 +225,109 @@ describe('choosing a model', () => {
 
 });
 
-describe('checking OpenRouter before a brief', () => {
+describe('finding a free model before a brief', () => {
   const input: BriefInput = { kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} };
-  const [M1, M2, M3] = MODELS;
-  const config: AiConfig = { provider: 'openrouter', apiKey: 'k', model: M1! };
   const path = (url: unknown) => String(url).replace('https://openrouter.ai/api/v1', '');
-
-  it('checks the key, then each model in order, and skips the ones that are gone', async () => {
+  const memoryCatalog = () => { let kept: FreeModel[] | null = null; return { cached: () => kept, save: (m: FreeModel[]) => { kept = m; } }; };
+  const brief = (content = '# Good morning\n\nBody') => json({ choices: [{ finish_reason: 'stop', message: { content } }] });
+  /** Answers OpenRouter the way `chat` says, and records every call in order. */
+  const openRouter = (chat: (body: { model: string; messages: Array<{ content: string }>; provider?: unknown }) => Response) => {
     const calls: string[] = [];
     stubFetch(async (url, init) => {
       const p = path(url);
-      calls.push(init?.method === 'POST' ? `POST ${JSON.parse(String(init.body)).model}` : p);
-      if (p === '/key') return json({ data: {} });
-      if (p === `/models/${M1}/endpoints`) return json({ error: { code: 404, message: 'gone' } }, 404);
-      if (p === `/models/${M2}/endpoints`) return json({ data: { endpoints: [] } });
-      if (p.endsWith('/endpoints')) return json({ data: { endpoints: [{}] } });
-      return json({ choices: [{ finish_reason: 'stop', message: { content: '# Good morning\n\nBody' } }] });
+      if (p === '/key') { calls.push('key'); return json({ data: {} }); }
+      if (p === '/models') { calls.push('models'); return json({ data: CATALOG }); }
+      const body = JSON.parse(String(init?.body));
+      const ping = body.messages.length === 1;
+      calls.push(`${ping ? 'ping' : 'brief'} ${body.model}${body.provider ? '' : ' (open)'}`);
+      return chat(body);
     });
-    const steps: ProgressStep[] = [];
-    const text = await createComposer(config)(input, (s) => steps.push(s));
-    assert.equal(calls[0], '/key');
-    assert.deepEqual(calls.at(-1), `POST ${M3}`);
-    assert.ok(!calls.includes(`POST ${M1}`) && !calls.includes(`POST ${M2}`));
-    // Reported in chain order, after the key.
-    const checks = steps.filter((s) => s.key.startsWith('check:') && s.state !== 'running').map((s) => s.key);
-    assert.deepEqual(checks, ['check:key', ...MODELS.map((m) => `check:model:${m}`)]);
-    assert.match(text, /Written by .*, a fallback, because nemotron-3-ultra-550b-a55b couldn't write it/);
+    return calls;
+  };
+
+  it('keeps only free text models with room for a brief, and ranks them best first', () => {
+    const models = freeModelsFrom(CATALOG as never);
+    assert.deepEqual(rankFreeModels(models).map((m) => m.id), ['acme/big-120b:free', 'acme/mid-30b:free', 'acme/new:free', 'acme/thinker-200b:free']);
   });
 
-  it('stops at a rejected key without sending any tool data', async () => {
+  it('checks the key, finds the free models, tests the best one, then writes with it', async () => {
+    const calls = openRouter(() => brief());
+    const catalog = memoryCatalog();
+    const steps: ProgressStep[] = [];
+    const text = await createComposer({ provider: 'openrouter', apiKey: 'k', model: 'gone/model:free', catalog })(input, (s) => steps.push(s));
+    assert.deepEqual(calls, ['key', 'models', 'ping acme/big-120b:free', 'brief acme/big-120b:free']);
+    assert.equal(text, '# Good morning\n\nBody');
+    assert.equal(catalog.cached()!.length, 4);
+    // The ping carries nothing of yours.
+    const done = steps.filter((s) => s.state === 'done').map((s) => s.key);
+    assert.deepEqual(done.slice(0, 3), ['check:key', 'check:models', 'check:ping:acme/big-120b:free']);
+  });
+
+  it('moves down the list until a model answers the test, and uses the ones after it as fallbacks', async () => {
+    const calls = openRouter((body) => {
+      if (body.model === 'acme/big-120b:free') return json({ error: { code: 404, message: 'No endpoints found matching your data policy' } }, 404);
+      if (body.model === 'acme/mid-30b:free' && body.messages.length > 1) return json({ error: { code: 429, message: 'busy' } }, 429);
+      return brief();
+    });
+    const { chain } = await prepareModels('k', '', undefined);
+    assert.deepEqual(chain, ['acme/mid-30b:free', 'acme/new:free', 'acme/thinker-200b:free', 'openrouter/free']);
+    calls.length = 0;
+    const text = await createComposer({ provider: 'openrouter', apiKey: 'k', model: '' })(input);
+    assert.deepEqual(calls.slice(2), ['ping acme/big-120b:free', 'ping acme/mid-30b:free', 'brief acme/mid-30b:free', 'brief acme/new:free']);
+    assert.match(text, /Written by acme\/new:free, a fallback, because mid-30b couldn't write it/);
+  });
+
+  it('only tries providers that may keep prompts when none that keep them private answers, and says so', async () => {
+    const calls = openRouter((body) => (body.provider ? json({ error: { code: 404, message: 'No endpoints found matching your data policy' } }, 404) : brief()));
+    const text = await createComposer({ provider: 'openrouter', apiKey: 'k', model: '' })(input);
+    assert.deepEqual(calls.filter((c) => c.startsWith('ping')).length, 6);
+    assert.deepEqual(calls.slice(-2), ['ping acme/big-120b:free (open)', 'brief acme/big-120b:free (open)']);
+    assert.ok(text.includes(LOGGING_NOTICE));
+  });
+
+  it("uses the last list, then the built-in one, when OpenRouter's list can't be read", async () => {
+    const catalog = memoryCatalog();
+    catalog.save(rankFreeModels(freeModelsFrom(CATALOG as never)).slice(2));
+    stubFetch(async (url) => (path(url) === '/key' ? json({ data: {} }) : path(url) === '/models' ? json({}, 500) : brief()));
+    assert.equal((await prepareModels('k', '', catalog)).chain[0], 'acme/new:free');
+    assert.equal((await prepareModels('k', '', undefined)).chain[0], MODELS[0]);
+  });
+
+  it("stops at OpenRouter's daily limit on free requests instead of spending more, and says when it lifts", async () => {
+    const reset = Date.UTC(2026, 10, 27);
+    const calls = openRouter(() => json({ error: { code: 429, message: 'Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day', metadata: { headers: { 'X-RateLimit-Limit': '50', 'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': String(reset) } } } }, 429));
+    const error = await createComposer({ provider: 'openrouter', apiKey: 'k', model: '' })(input).catch((e) => e);
+    assert.deepEqual(calls, ['key', 'models', 'ping acme/big-120b:free']);
+    assert.equal(error.resetAt, reset);
+    assert.match(describeComposeError(error), /today's free OpenRouter requests are used up.*\$10 of credit/);
+  });
+
+  it("moves on when only one provider is rate limiting, since that isn't the daily limit", async () => {
+    const calls = openRouter((body) => (body.model === 'acme/big-120b:free' ? json({ error: { code: 429, message: 'temporarily rate-limited upstream' } }, 429) : brief()));
+    await createComposer({ provider: 'openrouter', apiKey: 'k', model: '' })(input);
+    assert.deepEqual(calls.slice(2, 4), ['ping acme/big-120b:free', 'ping acme/mid-30b:free']);
+  });
+
+  it('stops at a rejected key without testing any model', async () => {
     const calls: string[] = [];
-    stubFetch(async (url, init) => { calls.push(init?.method ?? 'GET'); return path(url) === '/key' ? json({ error: { message: 'no' } }, 401) : json({}); });
-    const error = await createComposer(config)(input).catch((e) => e);
-    assert.deepEqual(calls, ['GET']);
+    stubFetch(async (url) => { calls.push(path(url)); return path(url) === '/key' ? json({ error: { message: 'no' } }, 401) : brief(); });
+    const error = await createComposer({ provider: 'openrouter', apiKey: 'k', model: '' })(input).catch((e) => e);
+    assert.deepEqual(calls, ['/key']);
     assert.equal(describeComposeError(error), 'the OpenRouter API key was rejected');
   });
 
-  it('keeps a model it could not check, and fails when none is left', async () => {
-    stubFetch(async (url) => {
-      const p = path(url);
-      if (p === '/key') return json({ data: {} });
-      if (p === `/models/${M1}/endpoints`) throw new TypeError('Network request failed');
-      return json({ error: { code: 404, message: 'gone' } }, 404);
+  it('gives a model that ran out of room a second go with thinking kept light', async () => {
+    const bodies: Array<{ reasoning: unknown; max_tokens: number }> = [];
+    stubFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      return bodies.length === 1 ? json({ choices: [{ finish_reason: 'length', message: { content: 'half' } }] }) : brief();
     });
-    assert.deepEqual(await checkOpenRouter('k', M1!), [M1]);
-    mock.restoreAll();
-    stubFetch(async (url) => (path(url) === '/key' ? json({ data: {} }) : json({}, 404)));
-    const error = await checkOpenRouter('k', M1!).catch((e) => e);
-    assert.match(describeComposeError(error), /none of the models/);
+    assert.equal(await createOpenRouterComposer('k', MODELS[1]!)(input), '# Good morning\n\nBody');
+    assert.deepEqual(bodies.map((b) => [b.reasoning, b.max_tokens]), [[{ enabled: false }, 5000], [{ effort: 'low', exclude: true }, 16000]]);
   });
 
-  it('always writes an unranked digest when OpenRouter is unreachable or the AI setup throws', async () => {
+  it('always writes an unranked digest as the last resort, when OpenRouter is unreachable or the AI setup throws', async () => {
     stubFetch(async () => { throw new TypeError('Network request failed'); });
     const store = newStore();
     store.setSecret('openrouter', 'sk-or-test-key');
@@ -661,9 +741,12 @@ describe('OpenRouter', () => {
 
   it('sends no tools, caps output, skips data-collecting providers, and strips reasoning', async () => {
     const fetchMock = reply({ choices: [{ finish_reason: 'stop', message: { content: '<think>hmm</think># Good morning' } }] });
-    assert.equal(await createOpenRouterComposer('sk-or-x', MODELS[0])(input), '# Good morning');
+    assert.equal(await createOpenRouterComposer('sk-or-x', MODELS[1]!)(input), '# Good morning');
     const body = JSON.parse(String((fetchMock.mock.calls[0]!.arguments[1] as RequestInit).body));
-    like(body, { model: MODELS[0], max_tokens: 5000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
+    like(body, { model: MODELS[1], max_tokens: 5000, provider: { data_collection: 'deny' }, reasoning: { enabled: false } });
+    // A model that can set its effort to none is asked that way.
+    await createOpenRouterComposer('sk-or-x', MODELS[0])(input);
+    like(JSON.parse(String((fetchMock.mock.calls[1]!.arguments[1] as RequestInit).body)), { reasoning: { effort: 'none' } });
     assert.equal(body.tools, undefined);
   });
 
@@ -678,7 +761,7 @@ describe('OpenRouter', () => {
     assert.equal(await createOpenRouterComposer('k', MODELS[3])(input), '# Good morning');
     assert.deepEqual(bodies.map((b) => [b.model, b.reasoning, b.max_tokens]), [
       [MODELS[3], { enabled: false }, 5000],
-      [MODELS[3], { effort: 'low', exclude: true }, 12000],
+      [MODELS[3], { effort: 'low', exclude: true }, 16000],
     ]);
   });
 
