@@ -33,7 +33,7 @@ One WOOP a week, in four steps, each on its own screen. A clock at the top count
 
 ## AI, with history as the fallback
 
-Both AI features use the same OpenRouter path as briefs: your first model, then the rest of the five free models in order, with `provider: {data_collection: "deny"}` and reasoning off. Without a key, or when the AI fails, the same screen shows suggestions worked out on the phone from your history, and says why.
+Both AI features use the same OpenRouter path as briefs: your first model, then the rest of the free models from the last list OpenRouter gave, best first, with `provider: {data_collection: "deny"}` and reasoning off. Without a key, or when the AI fails, the same screen shows suggestions worked out on the phone from your history, and says why.
 
 ### Smart obstacle prediction
 
