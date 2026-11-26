@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { parseBrief, parseGoal, parsePlanBlock, parsePriority } from '../src/parseBrief';
+import { currentBlock, parseBrief, parseGoal, parsePlanBlock, parsePriority, toMinutes } from '../src/parseBrief';
 
 function project(actual: unknown, expected: unknown): unknown {
   if (!expected || typeof expected !== 'object' || Array.isArray(expected) || !actual || typeof actual !== 'object') return actual;
@@ -188,6 +188,23 @@ describe('the Lumen brief layout', () => {
 });
 
 describe('day plan', () => {
+  it('marks the block the time falls in, runs a block ending at 00:00 to midnight, and marks the next one between blocks', () => {
+    const day = [
+      { start: '07:00', end: '09:00' },
+      { start: '09:00', end: '12:00' },
+      { start: '13:00', end: '18:00' },
+      { start: '23:00', end: '00:00' },
+    ];
+    const at = (hhmm: string) => currentBlock(day, toMinutes(hhmm));
+    assert.deepEqual(at('07:00'), { index: 0, now: true });
+    assert.deepEqual(at('11:59'), { index: 1, now: true });
+    assert.deepEqual(at('12:30'), { index: 2, now: false });
+    assert.deepEqual(at('23:45'), { index: 3, now: true });
+    assert.deepEqual(at('06:30'), { index: 0, now: false });
+    // A block with no end runs to the next one's start.
+    assert.deepEqual(currentBlock([{ start: '07:00', end: null }, { start: '10:00', end: '11:00' }], toMinutes('09:30')), { index: 0, now: true });
+  });
+
   it('reads a block with its time, energy, why and goal', () => {
     assert.deepEqual(parsePlanBlock('09:00–10:30 | High | German: finish Lesson 12 and 20 Anki cards → fresh morning focus suits new grammar | Goal: Pass B1 German (KR1)'), {
       start: '09:00', end: '10:30', energy: 'high', task: 'German: finish Lesson 12 and 20 Anki cards', why: 'fresh morning focus suits new grammar', goal: 'Pass B1 German (KR1)',

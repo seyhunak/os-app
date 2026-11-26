@@ -7,7 +7,7 @@ import { SwipeRow } from '../SwipeRow';
 import type { Api } from '../api';
 import { useRefresh } from '../refresh';
 import { autoBriefFor, freshness } from '../staleBrief';
-import { parseBrief, type Energy, type Goal, type GoalStatus, type NoiseItem, type ParsedBrief, type PlanBlock, type Priority } from '../parseBrief';
+import { currentBlock, parseBrief, type Energy, type Goal, type GoalStatus, type NoiseItem, type ParsedBrief, type PlanBlock, type Priority } from '../parseBrief';
 import { Button, display, ErrorNote, F, Loading, message, R, Screen, useColors, type Colors } from '../ui';
 
 const WIDE_AT = 860;
@@ -74,9 +74,10 @@ function Panel({ children, tone }: { children: ReactNode; tone?: 'deep' }) {
   );
 }
 
-function Row({ children, first, selected }: { children: ReactNode; first?: boolean; selected?: boolean }) {
+/** `selected` marks a row with an accent edge. `now` also tints it, for the day plan's current block. */
+function Row({ children, first, selected, now }: { children: ReactNode; first?: boolean; selected?: boolean; now?: boolean }) {
   const c = useColors();
-  return <View style={{ paddingHorizontal: 16, paddingVertical: 14, gap: 6, borderTopWidth: first ? 0 : 1, borderColor: c.line, ...(selected ? { borderLeftWidth: 2, borderLeftColor: c.accent } : null) }}>{children}</View>;
+  return <View style={{ paddingHorizontal: 16, paddingVertical: 14, gap: 6, borderTopWidth: first ? 0 : 1, borderColor: c.line, ...(selected || now ? { borderLeftWidth: now ? 3 : 2, borderLeftColor: c.accent } : null), ...(now ? { backgroundColor: c.accentSoft } : null) }}>{children}</View>;
 }
 
 /** A chip carries state only. */
@@ -176,10 +177,19 @@ const minutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.sl
 /** The day in time blocks, each matched to the energy it needs. The block happening now is marked, on today's brief only. */
 function DayPlan({ blocks, createdAt }: { blocks: PlanBlock[]; createdAt: string }) {
   const c = useColors();
-  const now = new Date();
+  // Ticks each minute, so the marked block moves along while the screen stays open.
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
   const today = new Date(createdAt).toDateString() === now.toDateString();
   const at = now.getHours() * 60 + now.getMinutes();
-  const current = today ? blocks.findIndex((b) => b.end && minutes(b.start) <= at && at < minutes(b.end)) : -1;
+  const marked = today ? currentBlock(blocks, at) : { index: -1, now: false };
+  const current = marked.index;
+  // Blocks already over are dimmed, so the one happening now stands out. After the last block, all are.
+  const over = (i: number) => today && (current === -1 ? at >= minutes(blocks[0]!.start) : i < current);
+  const clock = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   const first = blocks[0]!.start;
   const last = blocks.at(-1)!.end ?? blocks.at(-1)!.start;
   return (
@@ -189,18 +199,18 @@ function DayPlan({ blocks, createdAt }: { blocks: PlanBlock[]; createdAt: string
         {blocks.map((block, i) => {
           const tone = energyTone(block.energy, c);
           return (
-            <Row key={i} first={i === 0} selected={i === current}>
+            <Row key={i} first={i === 0} now={i === current}>
               <View style={{ flexDirection: 'row', gap: 14 }}>
                 <View style={{ width: 52 }}>
-                  <Text style={{ color: i === current ? c.accent : c.text, fontFamily: F.monoMedium, fontSize: 14, lineHeight: 22 }}>{block.start}</Text>
+                  <Text style={{ color: i === current ? c.accent : over(i) ? c.muted : c.text, fontFamily: F.monoMedium, fontSize: 14, lineHeight: 22 }}>{block.start}</Text>
                   {block.end ? <Text style={{ color: c.muted, fontFamily: F.mono, fontSize: 12, lineHeight: 16 }}>{block.end}</Text> : null}
                 </View>
                 <View style={{ flex: 1, gap: 6 }}>
-                  <Text style={{ color: c.text, fontFamily: F.sansMedium, fontSize: 16, lineHeight: 22 }}>{block.task}</Text>
+                  <Text style={{ color: over(i) ? c.muted : c.text, fontFamily: F.sansMedium, fontSize: 16, lineHeight: 22 }}>{block.task}</Text>
                   {block.why ? <Text style={{ color: c.ink2, fontFamily: F.text, fontSize: 14, lineHeight: 20 }}>{block.why}</Text> : null}
                   {block.energy || block.goal || i === current ? (
                     <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 6 }}>
-                      {i === current ? <Tag label="Now" fg={c.accent} bg="transparent" /> : null}
+                      {i === current ? <Tag label={marked.now ? `Now · ${clock}` : `Next · now ${clock}`} fg={c.accent} bg="transparent" /> : null}
                       {block.energy ? <Tag label={ENERGY_LABEL[block.energy]} fg={tone.fg} bg={tone.bg} /> : null}
                       {block.goal ? <Text style={{ flexShrink: 1, color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{`moves ${block.goal}`}</Text> : null}
                     </View>

@@ -46,7 +46,7 @@ Its **Goals** tab adds [WOOP](#goals-woop), a research-backed way to turn one we
 There are four kinds of brief: morning, afternoon, evening and night. Every brief opens with a greeting for its kind (good morning, good afternoon, good evening or good night) and the date and time it was written. Then, in this order:
 
 1. **Focus:** the 3 most important things to do, drawn from your goals and your tools together, each with its source, the goal it moves, what "done" looks like, and the time slot it sits in. A step that comes from a goal alone, with no tool item behind it, shows "Goals" as its source.
-2. **Day plan:** the rest of the day in time blocks, from the time the brief is written, each matched to the energy it needs. Deep work such as studying a language, writing or coding goes in your sharpest hours; light work and short replies go in your dip; calls and collaboration go in steady hours or your second wind. Which hours those are comes from your energy peak in Settings. Calendar events keep their real times and are marked fixed. If an update says how you slept or feel today, the plan follows that instead. The block happening now is marked. The block happening now is marked.
+2. **Day plan:** the whole day in 8 to 14 time blocks, from 07:00 to 00:00, each matched to the energy it needs. The last block, ending at 00:00, closes the day. Blocks before the brief was written show what that time was for; the work still to do goes from then on. Deep work such as studying a language, writing or coding goes in your sharpest hours; light work and short replies go in your dip; calls and collaboration go in steady hours or your second wind. Which hours those are comes from your energy peak in Settings. Calendar events keep their real times and are marked fixed. If an update says how you slept or feel today, the plan follows that instead. On today's brief, the block happening now is highlighted with the current time and moves along each minute. Between blocks the next one is marked, and blocks already over are dimmed.
 3. **Signals:** items scored from 0 to 100 against your goals, highest first, each with its source and the goal it serves. Only items scoring 60 or more are signals (80 or more is critical). Shown open.
 4. **Noise:** what scored under 60, with its source, its score and why it was left out. It starts collapsed.
 5. **Goal progress:** the health of each goal (on track, needs attention, at risk or no evidence), the evidence for it and its next action. The heading sums it up, such as "2 on track, 1 at risk".
@@ -61,10 +61,10 @@ What each kind is for:
 
 | Kind | Focus | Day plan | Reads your tools |
 |---|---|---|---|
-| Morning | The 3 most important things to do today | The rest of today, hardest work first | Yes, once a day |
-| Afternoon | What to finish before the day ends, given what has moved | Light work through the dip, then the hardest remaining task | Reuses today's data, or reads if there's none |
-| Evening | What to close today or start with tomorrow | A light evening, then tomorrow's first blocks | No, uses the day's data |
-| Night | The 3 things to start with tomorrow | Tomorrow, from a normal start | No, uses the day's data |
+| Morning | The 3 most important things to do today | All of today, 07:00–00:00, hardest work in the sharp hours ahead | Yes, once a day |
+| Afternoon | What to finish before the day ends, given what has moved | All of today, 07:00–00:00: the morning as it went, then the rest | Reuses today's data, or reads if there's none |
+| Evening | What to close today or start with tomorrow | All of today, 07:00–00:00, a light evening closing at 00:00 | No, uses the day's data |
+| Night | The 3 things to start with tomorrow | All of tomorrow, 07:00–00:00 | No, uses the day's data |
 
 Older briefs, written before this layout, still open. They show the sections they have.
 
@@ -108,7 +108,7 @@ How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
 ## Settings
 
 - **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
-- **Tools:** grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
+- **Tools:** collapses to how many tools you've selected, and starts open when none are. Tap it to expand. Inside, tools are grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
 - **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and which of today's free models goes first. Once set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).
 - **Your data:** what the app stores, and the button that erases it. See [Your data](#your-data).
