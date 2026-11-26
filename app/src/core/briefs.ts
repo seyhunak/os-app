@@ -132,16 +132,29 @@ export class BriefService {
 
     let body: string;
     let generator: Brief['generator'] = 'digest';
-    const composer = this.deps.composer();
     const read = sources.reduce((n, s) => n + (facts[s.toolkit]?.length ?? 0), 0);
-    if (composer) {
+    const unranked = (error: unknown) => {
+      progress({ key: 'digest', text: `Couldn't rank: ${describeComposeError(error)}. Writing an unranked digest instead`, state: 'warn' });
+      return renderDigest(input, `${describeComposeError(error)}, so this brief was not ranked`);
+    };
+    // Whatever goes wrong with the AI, a brief is still written: an unranked digest of what was read.
+    let composer: Composer | null = null;
+    let setupError: unknown = null;
+    try {
+      composer = this.deps.composer();
+    } catch (error) {
+      setupError = error;
+    }
+    if (setupError) {
+      body = unranked(setupError);
+    } else if (composer) {
       progress({ key: 'weigh', text: `Handing ${plural(read, 'item')} and your goals to the AI, with secrets already stripped out`, state: 'done' });
       try {
         body = await composer(input, progress);
+        if (!body?.trim()) throw new Error('the AI model returned an empty brief');
         generator = 'ai';
       } catch (error) {
-        progress({ key: 'digest', text: `Couldn't rank: ${describeComposeError(error)}. Writing an unranked digest instead`, state: 'warn' });
-        body = renderDigest(input, `${describeComposeError(error)}, so this brief was not ranked`);
+        body = unranked(error);
       }
     } else {
       progress({ key: 'digest', text: 'No OpenRouter key, so writing an unranked digest of what was read', state: 'skip' });
