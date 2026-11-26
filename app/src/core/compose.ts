@@ -265,6 +265,8 @@ const FREE_TIMEOUT_MS = 90_000;
 
 export interface ComposerOptions {
   sleep?: (ms: number) => Promise<void>;
+  /** The models to try, in order, after the OpenRouter check dropped the missing ones. Defaults to the whole chain. */
+  chain?: string[];
 }
 
 /**
@@ -309,7 +311,9 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
       return text;
     };
 
-    const chain = modelChain(model);
+    const chain = options.chain?.length ? options.chain : modelChain(model);
+    // A fallback is named against the model you chose, even when the check skipped it.
+    const first = modelChain(model)[0]!;
     const errors: unknown[] = [];
     for (let pass = 0; ; pass++) {
       errors.length = 0;
@@ -320,8 +324,8 @@ export function createOpenRouterComposer(apiKey: string, model: string, options:
         try {
           const text = await send(id);
           progress?.({ key, text: `${capitalize(name)} ranked your day and wrote the brief`, state: 'done' });
-          if (id === chain[0]) return text;
-          const notice = `> Written by ${id}, a fallback, because ${modelName(chain[0]!)} couldn't write it.`;
+          if (id === first) return text;
+          const notice = `> Written by ${id}, a fallback, because ${modelName(first)} couldn't write it.`;
           return /^# .*\n/.test(text) ? text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${text}`;
         } catch (error) {
           progress?.({ key, text: `${capitalize(name)} ${whyFailed(error)}${stopsChain(error) ? '' : ', trying the next one'}`, state: 'warn' });
@@ -362,7 +366,77 @@ export class ChainError extends Error {
   }
 }
 
-export const createComposer = (config: AiConfig): Composer => createOpenRouterComposer(config.apiKey, config.model);
+const CHECK_TIMEOUT_MS = 15_000;
+
+/** No model on the list can be used, so there is nothing to ask. */
+export class NoModelsError extends Error {
+  constructor() {
+    super('none of the models on the list is available on OpenRouter right now');
+  }
+}
+
+/**
+ * Checks, in order, the OpenRouter key and then each model in your chain, before any tool data is sent.
+ * A rejected or unreachable key stops here. A model OpenRouter says is gone, or has no provider for, is
+ * skipped. A model that couldn't be checked stays in, since the check itself may be what failed.
+ * Returns the models worth asking, in order.
+ */
+export async function checkOpenRouter(apiKey: string, model: string, progress?: OnProgress): Promise<string[]> {
+  progress?.({ key: 'check:key', text: 'Checking your OpenRouter key', state: 'running' });
+  try {
+    await verifyOpenRouterKey(apiKey);
+    progress?.({ key: 'check:key', text: 'OpenRouter accepted your key', state: 'done' });
+  } catch (error) {
+    const rejected = error instanceof OpenRouterError && (error.status === 401 || error.status === 403);
+    const reachable = error instanceof OpenRouterError;
+    if (rejected || !reachable) {
+      progress?.({ key: 'check:key', text: rejected ? 'OpenRouter rejected your key' : "OpenRouter couldn't be reached", state: 'warn' });
+      // 401 stops the chain, and anything else unreachable is reported as it is.
+      throw rejected ? new OpenRouterError(401, 'key rejected') : error;
+    }
+    // OpenRouter answered but had trouble of its own, so the models are still worth a try.
+    progress?.({ key: 'check:key', text: `OpenRouter couldn't check your key (${error.status}), trying anyway`, state: 'warn' });
+  }
+
+  const chain = modelChain(model);
+  const checks = chain.map(async (id): Promise<boolean | null> => {
+    try {
+      const response = await fetch(`${OPENROUTER_URL}/models/${id}/endpoints`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: timeoutSignal(CHECK_TIMEOUT_MS),
+      });
+      if (response.status === 404) return false;
+      if (!response.ok) return null;
+      const data = (await response.json().catch(() => null)) as { data?: { endpoints?: unknown[] } } | null;
+      const endpoints = data?.data?.endpoints;
+      return Array.isArray(endpoints) ? endpoints.length > 0 : null;
+    } catch {
+      return null;
+    }
+  });
+  const usable: string[] = [];
+  // Asked all at once, told in order.
+  for (const [i, id] of chain.entries()) {
+    const key = `check:model:${id}`;
+    const name = capitalize(modelName(id));
+    progress?.({ key, text: `Checking ${modelName(id)}`, state: 'running' });
+    const available = await checks[i];
+    if (available === false) {
+      progress?.({ key, text: `${name} isn't available on OpenRouter right now, skipping it`, state: 'warn' });
+      continue;
+    }
+    usable.push(id);
+    progress?.({ key, text: available ? `${name} is available` : `${name} couldn't be checked, keeping it in`, state: available ? 'done' : 'warn' });
+  }
+  if (!usable.length) throw new NoModelsError();
+  return usable;
+}
+
+/** Checks the key and the models in order, then asks the ones that passed. */
+export const createComposer = (config: AiConfig): Composer => async (input, progress) => {
+  const chain = await checkOpenRouter(config.apiKey, config.model, progress);
+  return createOpenRouterComposer(config.apiKey, config.model, { chain })(input, progress);
+};
 
 /** The models Settings offers, in fallback order. */
 export const modelOptions = (): ModelOption[] => MODELS.map((id, i) => ({ id, note: i === 0 ? 'Default' : `Fallback ${i}` }));
@@ -388,7 +462,7 @@ export function describeComposeError(error: unknown): string {
     if (error.status === 429) return "the model's provider is rate limiting it. Try again in a minute, or choose another model in Settings";
     return `OpenRouter returned an error (${error.status})`;
   }
-  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'TypeError')) return "OpenRouter couldn't be reached";
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError' || error.name === 'TypeError')) return "OpenRouter couldn't be reached";
   return error instanceof Error ? error.message : 'the AI step failed';
 }
 

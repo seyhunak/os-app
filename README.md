@@ -227,6 +227,8 @@ Go to **Settings → Model**, paste your OpenRouter key once, and tap a model to
 
 How the list behaves:
 
+- **Checked in order before anything is sent.** Each brief first checks your OpenRouter key (`GET /key`), then each model in your order (`GET /models/{id}/endpoints`), and the progress view shows each check. A rejected or unreachable key stops there, before any tool data leaves the phone. A model OpenRouter no longer lists, or has no provider for, is skipped. A model whose check fails for some other reason stays in, because the check itself may be what broke. These checks aren't model requests, so they don't count against the free daily limit.
+- **There is always a brief.** If the key, every model or the AI setup fails, you get an unranked digest of what was read, with the reason at the top.
 - **Busy models are skipped at once.** A rate-limited, overloaded, slow or failed model hands over to the next one, with no wait. An answer that runs out of tokens, comes back empty, or is cut off partway (`finish_reason: "error"`) counts as a failure too.
 - **One more pass when everything was only busy.** If every model was just rate limited, OS waits 3 seconds and goes down the list once more. If anything else went wrong, it doesn't go round again.
 - **Some failures stop it at once.** A rejected key, or a guardrail that flags prompt injection, would fail the same way on every model, so nothing else is tried.

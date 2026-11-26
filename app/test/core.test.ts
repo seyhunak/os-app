@@ -3,8 +3,8 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { endOfWeek, toolkitBySlug } from '../src/core/collectors';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/core/composio';
 import {
-  createOpenRouterComposer, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
-  renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer,
+  checkOpenRouter, createComposer, createOpenRouterComposer, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
+  renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer, type ProgressStep,
 } from '../src/core/compose';
 import type { Kind, Store } from '../src/core/db';
 import { createOs, OsError, type ScheduleInput } from '../src/core/os';
@@ -195,6 +195,76 @@ describe('choosing a model', () => {
     assert.equal(calls, 1);
   });
 
+});
+
+describe('checking OpenRouter before a brief', () => {
+  const input: BriefInput = { kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} };
+  const [M1, M2, M3] = MODELS;
+  const config: AiConfig = { provider: 'openrouter', apiKey: 'k', model: M1! };
+  const path = (url: unknown) => String(url).replace('https://openrouter.ai/api/v1', '');
+
+  it('checks the key, then each model in order, and skips the ones that are gone', async () => {
+    const calls: string[] = [];
+    stubFetch(async (url, init) => {
+      const p = path(url);
+      calls.push(init?.method === 'POST' ? `POST ${JSON.parse(String(init.body)).model}` : p);
+      if (p === '/key') return json({ data: {} });
+      if (p === `/models/${M1}/endpoints`) return json({ error: { code: 404, message: 'gone' } }, 404);
+      if (p === `/models/${M2}/endpoints`) return json({ data: { endpoints: [] } });
+      if (p.endsWith('/endpoints')) return json({ data: { endpoints: [{}] } });
+      return json({ choices: [{ finish_reason: 'stop', message: { content: '# Good morning\n\nBody' } }] });
+    });
+    const steps: ProgressStep[] = [];
+    const text = await createComposer(config)(input, (s) => steps.push(s));
+    assert.equal(calls[0], '/key');
+    assert.deepEqual(calls.at(-1), `POST ${M3}`);
+    assert.ok(!calls.includes(`POST ${M1}`) && !calls.includes(`POST ${M2}`));
+    // Reported in chain order, after the key.
+    const checks = steps.filter((s) => s.key.startsWith('check:') && s.state !== 'running').map((s) => s.key);
+    assert.deepEqual(checks, ['check:key', ...MODELS.map((m) => `check:model:${m}`)]);
+    assert.match(text, /Written by .*, a fallback, because nemotron-3-ultra-550b-a55b couldn't write it/);
+  });
+
+  it('stops at a rejected key without sending any tool data', async () => {
+    const calls: string[] = [];
+    stubFetch(async (url, init) => { calls.push(init?.method ?? 'GET'); return path(url) === '/key' ? json({ error: { message: 'no' } }, 401) : json({}); });
+    const error = await createComposer(config)(input).catch((e) => e);
+    assert.deepEqual(calls, ['GET']);
+    assert.equal(describeComposeError(error), 'the OpenRouter API key was rejected');
+  });
+
+  it('keeps a model it could not check, and fails when none is left', async () => {
+    stubFetch(async (url) => {
+      const p = path(url);
+      if (p === '/key') return json({ data: {} });
+      if (p === `/models/${M1}/endpoints`) throw new TypeError('Network request failed');
+      return json({ error: { code: 404, message: 'gone' } }, 404);
+    });
+    assert.deepEqual(await checkOpenRouter('k', M1!), [M1]);
+    mock.restoreAll();
+    stubFetch(async (url) => (path(url) === '/key' ? json({ data: {} }) : json({}, 404)));
+    const error = await checkOpenRouter('k', M1!).catch((e) => e);
+    assert.match(describeComposeError(error), /none of the models/);
+  });
+
+  it('always writes an unranked digest when OpenRouter is unreachable or the AI setup throws', async () => {
+    stubFetch(async () => { throw new TypeError('Network request failed'); });
+    const store = newStore();
+    store.setSecret('openrouter', 'sk-or-test-key');
+    const os = createOs({ store, createGateway: () => fakeGateway().gateway, now: () => NOW });
+    const brief = await os.generateBrief('morning');
+    assert.equal(brief.generator, 'digest');
+    assert.match(brief.markdown, /Unranked digest: OpenRouter couldn't be reached/);
+
+    const keyed = newStore();
+    keyed.setSecret('openrouter', 'sk-or-test-key');
+    const broken = createOs({ store: keyed, createGateway: () => fakeGateway().gateway, now: () => NOW, createComposer: () => { throw new Error('setup broke'); } });
+    assert.match((await broken.generateBrief('morning')).markdown, /Unranked digest: setup broke/);
+
+    const empty = await setup({ composer: async () => '' }).os.generateBrief('morning');
+    assert.equal(empty.generator, 'digest');
+    assert.match(empty.markdown, /empty brief/);
+  });
 });
 
 describe('toolkits', () => {
