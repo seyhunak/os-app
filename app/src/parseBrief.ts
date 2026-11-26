@@ -266,3 +266,26 @@ export function parseBrief(markdown: string, knownSources: string[] = []): Parse
     note: sections.get('note for next brief')?.trim() || null,
   };
 }
+
+/** Minutes since midnight for "HH:MM". */
+export const toMinutes = (hhmm: string) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+
+/**
+ * Which block the time `at` (minutes since midnight) falls in. An end at or before the start, such
+ * as 23:00–00:00, runs to midnight. A block with no end runs to the next one's start. Between
+ * blocks, the next one is marked instead. -1 when the day is over or nothing fits.
+ */
+export function currentBlock(blocks: Pick<PlanBlock, 'start' | 'end'>[], at: number): { index: number; now: boolean } {
+  const span = (b: Pick<PlanBlock, 'start' | 'end'>, i: number) => {
+    const start = toMinutes(b.start);
+    const next = blocks[i + 1];
+    let end = b.end ? toMinutes(b.end) : next ? toMinutes(next.start) : start + 60;
+    if (end <= start) end = 24 * 60;
+    return { start, end };
+  };
+  const spans = blocks.map(span);
+  const now = spans.findIndex((s) => s.start <= at && at < s.end);
+  if (now >= 0) return { index: now, now: true };
+  const next = spans.findIndex((s) => s.start > at);
+  return { index: next, now: false };
+}

@@ -178,13 +178,16 @@ export function SettingsScreen({ api, status, onChanged }: { api: Api; status: S
   // Set-up sections start collapsed to keep the page quiet. Anything missing starts open.
   const keys = composioState(status);
   const model = modelState(status);
+  const tools = status.selectedToolkits.length;
   return (
     <Screen>
       <Title>Settings</Title>
       <Section title="Energy" collapsed summary={ENERGY_PEAK_LABEL[status.energyPeak ?? DEFAULT_ENERGY_PEAK]}>
         <EnergySection api={api} saved={status.energyPeak ?? DEFAULT_ENERGY_PEAK} onChanged={onChanged} />
       </Section>
-      <Section title="Tools"><ToolList api={api} /></Section>
+      <Section title="Tools" collapsed={tools > 0} summary={tools ? `${tools} ${tools === 1 ? 'tool' : 'tools'} selected` : 'None selected'}>
+        <ToolList api={api} />
+      </Section>
       <Section title="Keys" collapsed={keys.configured} summary={keys.summary}>
         <KeyRow name="Composio" label="Composio API key" state={status.composio} hint={status.composioHint} getKeyUrl={COMPOSIO_URL} onSave={(k) => api.saveComposioKey(k).then(onChanged)} onRemove={() => api.removeCredential('composio').then(onChanged)} />
       </Section>

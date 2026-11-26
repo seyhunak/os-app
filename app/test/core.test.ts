@@ -3,7 +3,7 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { endOfWeek, toolkitBySlug } from '../src/core/collectors';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/core/composio';
 import {
-  createComposer, createOpenRouterComposer, LOGGING_NOTICE, prepareModels, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
+  briefPrompt, createComposer, createOpenRouterComposer, LOGGING_NOTICE, prepareModels, DEFAULT_MODEL, describeComposeError, extractNote, extractSourceSummaries, modelChain, MODELS,
   renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer, type ProgressStep,
 } from '../src/core/compose';
 import type { Kind, Store } from '../src/core/db';
@@ -659,6 +659,15 @@ describe('brief composition', () => {
     assert.ok(brief.markdown.includes('Nothing is marked as a signal'));
     assert.ok(!brief.markdown.includes('passcode'));
     assert.equal(brief.sources[0]!.summary, 'Last email, 1 unread. Latest: Contract due Friday from pat@example.com.');
+  });
+
+  it('asks for a day plan covering the whole day, 07:00 to 00:00, for every kind of brief', () => {
+    for (const kind of ['morning', 'afternoon', 'evening', 'night'] as Kind[]) {
+      const system = briefPrompt().system[kind];
+      assert.match(system, /the first starting at 07:00 and the last ending at 00:00/);
+      assert.match(system, /07:00 to 00:00/);
+    }
+    assert.doesNotMatch(briefPrompt().system.morning, /Never plan in the past/);
   });
 
   it('tells the model the local weekday and time, so the day plan starts from now', () => {
