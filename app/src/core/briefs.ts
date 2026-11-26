@@ -93,16 +93,15 @@ export class BriefService {
     store.pruneCache(now);
 
     progress({ key: 'goals', text: 'Reading your goals and recent updates', state: 'running' });
-    // This week's WOOP rides along as one line, so Focus and the day plan can lean on its if-then plan.
-    const goals = [store.getSetting('goals') ?? '', woopForBrief(store.woopForWeek(weekStartOf(now)))].filter((g) => g.trim()).join('\n');
+    // The weekly WOOP is the goal every brief ranks against.
+    const goals = woopForBrief(store.woopForWeek(weekStartOf(now)));
     // A digest never read the updates, so the window starts at the last brief an AI wrote.
     const lastRanked = store.listBriefs(30).find((b) => b.generator === 'ai');
     const updates = store.listLedger(UPDATES_SENT, lastRanked?.createdAt ?? new Date(now.getTime() - FIRST_UPDATES_MS).toISOString()).reverse();
-    const objectives = goals.split('\n').filter((l) => /^\s*O\s*\d*\s*:/i.test(l)).length;
     progress({
       key: 'goals',
-      text: goals.trim() ? `Read ${objectives ? plural(objectives, 'goal') : 'your goals'} and ${plural(updates.length, 'update')} ${lastRanked ? 'logged since your last brief' : 'from the last day'}` : 'No goals set yet, so nothing can be ranked against them. Add some in Settings',
-      state: goals.trim() ? 'done' : 'warn',
+      text: goals ? `Read this week's WOOP and ${plural(updates.length, 'update')} ${lastRanked ? 'logged since your last brief' : 'from the last day'}` : "No WOOP this week, so nothing can be ranked against it. Set one in the Goals tab",
+      state: goals ? 'done' : 'warn',
     });
     const previousNote = compactNote(extractNote(store.latestBrief()?.markdown));
     if (previousNote) progress({ key: 'note', text: 'Picking up the note your last brief left', state: 'done' });

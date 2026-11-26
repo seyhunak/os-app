@@ -9,7 +9,7 @@
 
 A short daily brief from your own tools: what matters, what to drop, and what to do next.
 
-OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses free AI models through [OpenRouter](https://openrouter.ai), with a cheap paid one as backup, to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
+OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses five free AI models through [OpenRouter](https://openrouter.ai), each one a fallback for the one before, to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
@@ -37,8 +37,9 @@ Its **Goals** tab adds [WOOP](#goals-woop), a research-backed way to turn one we
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** 23 tools in 8 categories, from Gmail and Google Calendar to Jira, Salesforce and Hacker News (see [What gets read](#what-gets-read-and-where-it-goes)). Only the tools you select are read; the rest are skipped, even if they're connected in Composio.
-3. **Get a brief.** An AI model picks the 3 things to do first, scores each item against your goals and drops the noise. Choose the model in Settings, where cheap models that write well are recommended. Without a key, you get a plain summary of what was read, with no focus, scores or noise.
-4. **Choose a schedule.** Pick morning, afternoon, evening or night briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
+3. **Get a brief.** An AI model picks the 3 things to do first, scores each item against this week's goal, set in the Goals tab, and drops the noise. Choose which of the five free models goes first in Settings. Without a key, you get a plain summary of what was read, with no focus, scores or noise.
+4. **Set your goal.** In the Goals tab, write this week's WOOP: a wish, its best outcome, the obstacle inside you, and an if-then plan. Every brief ranks against it.
+5. **Choose a schedule.** Pick morning, afternoon, evening or night briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
 
 ## What a brief looks like
 
@@ -98,15 +99,18 @@ With an OpenRouter key, AI helps at two steps. Without one, the same suggestions
 - **Plan optimization.** Suggests stronger if-then actions, ranked by how often past plans were used when their obstacle showed up.
 - **Contextual reminders.** Your if-then plan arrives as a notification at the time the obstacle tends to hit, such as the evening for fatigue, shifted by your energy peak. A review reminder comes on Sunday evening, and a nudge to set next week's WOOP on Monday morning.
 
-This week's WOOP is also added to the goals each brief reads. How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
+**The Goals tab is the only place for goals.** Every brief ranks against this week's WOOP: its wish is the goal, and when its obstacle usually shows up during the day, the day plan puts your if-then action there. With no WOOP this week, briefs say so and can't rank anything.
+
+**Goals from before WOOP.** The OKRs Settings used to keep, and goals pasted at onboarding, move to the Goals tab once, as **saved wishes**: each OKR becomes its objective, and pasted notes become one wish per line. The WOOP flow offers them as one-tap picks for the week's wish, and you can remove them from the Goals tab. Briefs no longer read them.
+
+How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
 
 ## Settings
 
-- **Goals:** up to 5 OKRs, written by the AI from your notes. Every brief ranks against them. Your weekly WOOP lives in the Goals tab.
 - **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
 - **Tools:** grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
-- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and the paid model each brief falls back to. Once both are set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).
+- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and which of the five free models goes first. Once set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).
 - **Your data:** what the app stores, and the button that erases it. See [Your data](#your-data).
 
 ## Design
@@ -211,37 +215,27 @@ Each schedule has a kind (morning, afternoon, evening or night), a time and the 
 
 OS uses [OpenRouter](https://openrouter.ai) only. Ollama was removed, since its cloud models are no longer free and a local model is too slow for a brief on most machines.
 
-Go to **Settings → Model**, paste your OpenRouter key once, and pick a paid model. Each brief tries free models first and uses yours only when none of them can write it (see [Free models first](#free-models-first)).
+OS uses only these five free models, in this order. The first is the default, and each one below is the fallback for the one above:
 
-- **Recommended first.** The list opens on one model per major lab (OpenAI, Google, Anthropic, DeepSeek, Qwen, Mistral, Meta, Z.ai, Moonshot, MiniMax, xAI): the cheapest general writing model of at least 14B parameters, under $3 per million tokens in and out. Coding, safety, image, audio and batch models are skipped. The rule picks up new models as they appear, with no list of names to maintain. The cheapest is marked "Best value".
-- **Cheapest to most expensive.** "Show all models" lists every model your key's guardrails allow, sorted by price, with the cost per million tokens in and out. Type to search them.
-- **Only models that can write a brief.** Models that output anything but text, batch-only models, and models with under 32K tokens of context are left out. A model with an unknown price is left out too.
-- **Free models are listed but not recommended.** They're often rate limited, so OS tries them for you on every brief anyway, with your model as the backup.
+1. `nvidia/nemotron-3-ultra-550b-a55b:free`
+2. `nvidia/nemotron-3.5-super-vl:free`
+3. `nvidia/nemotron-3.5-lightning:free`
+4. `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free`
+5. `baidu/ernie-5.5-flash-preview:free`
 
-The default paid model is `qwen/qwen3.7-flash`, at well under a cent per brief.
+Go to **Settings → Model**, paste your OpenRouter key once, and tap a model to put it first. The others keep their order behind it. Briefs and the WOOP suggestions use the same list. No other model is ever called: no paid models, and not OpenRouter's `openrouter/free` router. The list is `MODELS` in [app/src/core/compose.ts](app/src/core/compose.ts). A model saved before the list, such as a paid one, is replaced by the default.
 
-- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 5,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked for low effort and to keep it out of the answer. Some ignore that and think for 3,000 tokens or more anyway, so a free model like that gets 12,000 output tokens to finish in. Paid models always keep the 5,000 cap.
-- **Other failures.** You still get a plain brief that explains why, such as a model your guardrails don't allow.
-
-### Free models first
-
-Each brief tries models in this order until one writes it:
-
-1. **Free models your key allows**, up to five, from `GET /api/v1/models/user`, so your guardrails apply. Models from the labs above come first. Ones made for code or other single jobs, and ones under 14B parameters, are skipped. Like the recommended list, this is picked by rule, with no names to keep up to date.
-2. **`openrouter/free`**, OpenRouter's own router, which picks whichever free model is up. It's always tried, even if your models can't be listed.
-3. **Your model**, the paid one you chose in Settings.
-4. **Two paid fallbacks**, the recommended models closest to yours in price.
-
-How the chain behaves:
+How the list behaves:
 
 - **Busy models are skipped at once.** A rate-limited, overloaded, slow or failed model hands over to the next one, with no wait. An answer that runs out of tokens, comes back empty, or is cut off partway (`finish_reason: "error"`) counts as a failure too.
-- **One more pass when everything was only busy.** If every model was just rate limited, OS waits 3 seconds and goes round once more. If anything else went wrong, it doesn't go round again.
+- **One more pass when everything was only busy.** If every model was just rate limited, OS waits 3 seconds and goes down the list once more. If anything else went wrong, it doesn't go round again.
 - **Some failures stop it at once.** A rejected key, or a guardrail that flags prompt injection, would fail the same way on every model, so nothing else is tried.
-- **Works with no credit.** Free models work on a key whose account has a $0 balance. Paid models need credit. Without it, OpenRouter answers them with 402.
-- **Free models have a daily limit.** OpenRouter allows 50 free requests a day on accounts that haven't bought credits. One brief uses up to six, and twice that if it goes round a second time.
-- **The same privacy rules apply.** Every request still asks for providers that don't keep or train on prompts (`provider: {data_collection: "deny"}`). Free models whose providers do aren't used.
-- **You can see who wrote it.** A brief written by any model other than yours says so under its title, such as "Written by baidu/ernie-5.5-flash-preview:free, a free model."
-- **The reason is given when every model fails.** You get a plain brief that says why, such as "the free models were busy or unavailable, and the OpenRouter key is out of credit or over its budget for paid models."
+- **No hidden thinking.** Reasoning is turned off (`reasoning: {enabled: false}`), because a thinking model can spend the 5,000-token cap on thoughts and never finish the brief. Models that can't turn it off are asked for low effort and to keep it out of the answer, and get 12,000 output tokens to finish in.
+- **Works with no credit.** Free models work on a key whose account has a $0 balance.
+- **Free models have a daily limit.** OpenRouter allows 50 free requests a day on accounts that haven't bought credits. One brief uses up to five, and twice that if it goes round a second time.
+- **The same privacy rules apply.** Every request asks for providers that don't keep or train on prompts (`provider: {data_collection: "deny"}`).
+- **You can see who wrote it.** A brief written by a fallback says so under its title, such as "Written by nvidia/nemotron-3.5-super-vl:free, a fallback, because nemotron-3-ultra-550b-a55b couldn't write it."
+- **The reason is given when every model fails.** You get a plain brief that says why, such as "every model on the list was busy or unavailable, and the model's provider is rate limiting it."
 
 ## Offline
 
@@ -299,7 +293,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 - Scheduled briefs are written when you open the app or its reminder, not in the background.
 - One WOOP a week. WOOP reminders are set for the days ahead each time the app opens, so a phone left closed for over a week gets no reminders until it's opened again.
 - Android builds haven't been tested yet. iOS has.
-- Free models and the default paid model are cheap and can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't yours.
+- Free models can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't your first choice.
 - Focus, the day plan, scores and noise need an AI model. A plain brief, written without one, lists your goals, your sources and the last brief's note only.
 - Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. Salesforce, ClickUp, Microsoft To Do, Microsoft Teams, Zoom and Sentry are new and untested on real accounts, and Composio's default sign-in may not grant what some of them need to read, such as Teams chats or Sentry events. A tool that fails is named in the brief.
 - Calendars cover this week only, through Sunday, so next week's meetings don't appear until Monday. Email covers your last 5 from the last 3 days.

@@ -53,7 +53,6 @@ export function ToolsScreen({ api, onDone }: { api: Api; onDone(): void }) {
 }
 
 export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: Status; onDone(brief: Brief): void }) {
-  const [goals, setGoals] = useState('');
   const [openRouterKey, setOpenRouterKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -65,7 +64,6 @@ export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: St
     setBusy(true);
     setError(null);
     try {
-      if (goals.trim()) await api.saveGoals(goals);
       if (openRouterKey.trim()) await api.saveOpenRouterKey(openRouterKey.trim());
       await api.saveTimezone(deviceTimezone());
       progress.reset();
@@ -84,16 +82,7 @@ export function FirstBriefScreen({ api, status, onDone }: { api: Api; status: St
     <Screen>
       <BriefProgress visible={watching} title="writing your first brief" steps={progress.steps} error={null} onClose={() => setWatching(false)} />
       <Title step="Step 3 of 3">Your first brief</Title>
-      <Field
-        label="Paste your goals"
-        value={goals}
-        onChangeText={setGoals}
-        multiline
-        autoCapitalize="sentences"
-        autoCorrect
-        placeholder={'Paste them here, one per line. For example:\nLand 3 paying customers by March\nShip the beta by December 15'}
-        hint="A list or notes both work. Your brief ranks everything against your goals. You can skip this and add them in Settings."
-      />
+      <Body muted>After this, set your goal for the week in the Goals tab. It takes under five minutes, and every brief ranks against it.</Body>
       {status.openrouter ? null : (
         <Field
           label="OpenRouter API key (optional)"

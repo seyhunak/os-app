@@ -1,14 +1,14 @@
 import { BriefService, selectedToolkits } from './briefs';
 import { TOOLKITS, toolkitBySlug } from './collectors';
 import type { ComposioGateway, ConnectedAccount } from './composio';
-import { createComposer, DEFAULT_ENERGY_PEAK, DEFAULT_MODEL, isEnergyPeak, type EnergyPeak, describeComposeError, draftOkrs, listOpenRouterModels, MAX_GOALS, pickFree, type AiConfig, type Composer, type ModelOption, type OnProgress } from './compose';
+import { createComposer, DEFAULT_ENERGY_PEAK, DEFAULT_MODEL, isAllowedModel, isEnergyPeak, type EnergyPeak, describeComposeError, modelOptions, type AiConfig, type Composer, type ModelOption, type OnProgress } from './compose';
 import type { Brief, Kind, Schedule, Store } from './db';
 import { redact } from './redact';
 import { dueSchedule, nextRun } from './schedule';
 import {
   addDays, insights, isCue, isObstacleTag, isWoopResult, LIMITS, localDay, plansFromHistory, predictFromHistory, streak, suggestObstacles, suggestPlans,
   summarize, weekStartOf, woopReminders, type CheckIn, type ObstacleContext, type ObstacleSuggestion, type PlanContext, type PlanSuggestion,
-  type WoopInput, type WoopReminder, type WoopResult,
+  MAX_WISHES, wishesFromGoals, type WoopInput, type WoopReminder, type WoopResult,
 } from './woop';
 
 export interface OsDeps {
@@ -16,9 +16,6 @@ export interface OsDeps {
   createGateway(apiKey: string): ComposioGateway;
   createComposer?(config: AiConfig): Composer;
   verifyOpenRouterKey?(apiKey: string): Promise<void>;
-  listModels?(apiKey: string): Promise<ModelOption[]>;
-  /** Writes OKRs from notes. Defaults to OpenRouter. */
-  draftOkrs?(config: AiConfig, notes: string, max: number): Promise<string[]>;
   /** Told whenever schedules change, so the phone can set its reminders again. */
   onSchedulesChanged?(schedules: Schedule[]): void;
   /** Predicts this week's obstacles. Defaults to OpenRouter. */
@@ -34,15 +31,6 @@ export type ScheduleInput = Pick<Schedule, 'kind' | 'time' | 'days' | 'timezone'
 
 /** A problem to show as is. Everything else is reported with a general message. */
 export class OsError extends Error {}
-
-/** One goal's longest text. An OKR is a few short lines; longer pasted notes get rewritten first. */
-const GOAL_LENGTH = 2000;
-
-/** One OKR, tidied: no trailing spaces, no blank lines inside it. */
-const tidyGoal = (goal: string) => goal.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
-
-/** What a brief reads: each goal on its own lines, nothing else, to keep the prompt small. */
-export const goalsForBrief = (goals: string[]) => goals.map(tidyGoal).filter(Boolean).join('\n');
 
 const ACCOUNTS_TTL_MS = 86_400_000;
 const KINDS: Kind[] = ['morning', 'afternoon', 'evening', 'night'];
@@ -81,7 +69,11 @@ export function createOs(deps: OsDeps) {
   const now = () => deps.now?.() ?? new Date();
   const composioKey = () => store.getSecret('composio');
   const openRouterKey = () => store.getSecret('openrouter');
-  const openRouterModel = () => store.getSetting('ai_model_openrouter') || DEFAULT_MODEL;
+  /** Your first model. A model saved before the list, such as a paid one, falls back to the default. */
+  const openRouterModel = () => {
+    const saved = store.getSetting('ai_model_openrouter');
+    return saved && isAllowedModel(saved) ? saved : DEFAULT_MODEL;
+  };
   const aiConfig = (): AiConfig | null => {
     const apiKey = openRouterKey();
     return apiKey ? { provider: 'openrouter', apiKey, model: openRouterModel() } : null;
@@ -103,33 +95,24 @@ export function createOs(deps: OsDeps) {
     return list;
   };
   const forgetAccounts = () => store.deleteSetting('accounts_cache');
-  const saveModels = (models: ModelOption[]) => {
-    store.setSetting('recommended_models', JSON.stringify(models.filter((m) => m.recommended).map(({ id, price }) => ({ id, price }))));
-    store.setSetting('free_models', JSON.stringify(pickFree(models.map((m) => m.id))));
+  const savedWishes = (): string[] => JSON.parse(store.getSetting('woop_wishes') ?? '[]') as string[];
+  /**
+   * Goals from before WOOP, the OKRs Settings kept or notes pasted at onboarding, become saved
+   * wishes once, and stop being read by briefs. The weekly WOOP is the only goal now.
+   */
+  const moveOldGoals = () => {
+    const list = store.getSetting('goals_list');
+    const legacy = store.getSetting('goals');
+    if (list === null && legacy === null) return;
+    const old = list ? (JSON.parse(list) as string[]) : legacy?.trim() ? [legacy] : [];
+    const merged = [...new Map([...savedWishes(), ...wishesFromGoals(old)].map((w) => [w.toLowerCase(), w])).values()].slice(0, MAX_WISHES);
+    store.transaction(() => {
+      store.setSetting('woop_wishes', JSON.stringify(merged));
+      store.deleteSetting('goals_list');
+      store.deleteSetting('goals');
+    });
   };
-  const goalList = (): string[] => {
-    const saved = store.getSetting('goals_list');
-    if (saved) return JSON.parse(saved) as string[];
-    // Goals from before the list were one block of text, which stays one goal until it's rewritten.
-    const legacy = store.getSetting('goals')?.trim();
-    return legacy ? [legacy] : [];
-  };
-  const writeGoals = (list: string[]) => {
-    store.setSetting('goals_list', JSON.stringify(list));
-    store.setSetting('goals', goalsForBrief(list));
-  };
-  const okrs = async (notes: string, max: number): Promise<string[]> => {
-    const text = notes.trim();
-    if (!text) throw new OsError('Write a goal first');
-    if (text.length > 20_000) throw new OsError('Keep it under 20,000 characters');
-    const config = aiConfig();
-    if (!config) throw new OsError('Add your OpenRouter key in Settings, under Model, to write OKRs');
-    try {
-      return (await (deps.draftOkrs ?? draftOkrs)(config, text, max)).slice(0, max);
-    } catch (error) {
-      throw new OsError(`Couldn't write the OKR: ${describeComposeError(error)}.`);
-    }
-  };
+  moveOldGoals();
   const lastFour = (key: string | null) => (key ? key.slice(-4) : null);
 
   const briefs = new BriefService({
@@ -138,7 +121,7 @@ export function createOs(deps: OsDeps) {
     accounts,
     composer: () => {
       const config = aiConfig();
-      return config ? (deps.createComposer ? deps.createComposer(config) : createComposer(config, saveModels)) : null;
+      return config ? (deps.createComposer ? deps.createComposer(config) : createComposer(config)) : null;
     },
     now,
   });
@@ -227,23 +210,16 @@ export function createOs(deps: OsDeps) {
       return { ok: true };
     },
 
+    /** Chooses which of the listed models goes first. The others stay as fallbacks, in order. */
     async saveAi(model: string) {
       const id = model.trim();
-      if (!id || id.length > 200) throw new OsError('Choose a model');
+      if (!isAllowedModel(id)) throw new OsError('Choose one of the listed models');
       store.setSetting('ai_model_openrouter', id);
       return { provider: 'openrouter' as const, model: id };
     },
 
     async aiModels(): Promise<{ models: ModelOption[]; error: string | null }> {
-      const key = openRouterKey();
-      if (!key) return { models: [], error: 'Add your OpenRouter key above to see your models.' };
-      try {
-        const models = await (deps.listModels ?? listOpenRouterModels)(key);
-        saveModels(models);
-        return { models, error: null };
-      } catch {
-        return { models: [], error: "Couldn't get your models from OpenRouter. You can still type a model name." };
-      }
+      return { models: modelOptions(), error: null };
     },
 
     async toolkits(fresh = false) {
@@ -295,44 +271,15 @@ export function createOs(deps: OsDeps) {
       }
     },
 
-    async goals() {
-      return { goals: store.getSetting('goals') ?? '' };
+    /** Wishes saved from your old goals, offered as one-tap picks when you start a WOOP. */
+    async wishes() {
+      return { wishes: savedWishes() };
     },
-    /** Pasted notes, such as from onboarding. They become one goal, which Settings can rewrite as OKRs. */
-    async saveGoals(goals: string) {
-      if (goals.length > 20_000) throw new OsError('Keep your goals under 20,000 characters');
-      store.setSetting('goals_list', JSON.stringify(goals.trim() ? [goals.trim()] : []));
-      store.setSetting('goals', goals);
-      return { goals };
-    },
-
-    /** Your goals, one OKR each, at most five. */
-    async goalList() {
-      return { goals: goalList(), max: MAX_GOALS };
-    },
-    async saveGoalList(goals: string[]) {
-      const list = goals.map(tidyGoal).filter(Boolean);
-      if (list.length > MAX_GOALS) throw new OsError(`Keep it to ${MAX_GOALS} goals, so each one gets attention`);
-      if (list.some((g) => g.length > GOAL_LENGTH)) throw new OsError('A goal is too long. Shorten it, or rewrite it as an OKR');
-      writeGoals(list);
-      return { goals: list, max: MAX_GOALS };
-    },
-    /** Writes one OKR from what you typed and adds it to your goals. */
-    async addGoal(notes: string) {
-      const list = goalList();
-      if (list.length >= MAX_GOALS) throw new OsError(`You have ${MAX_GOALS} goals, the most OS keeps. Remove one to add another`);
-      const [okr] = await okrs(notes, 1);
-      writeGoals([...list, okr!]);
-      return { goals: goalList(), max: MAX_GOALS };
-    },
-    /** Rewrites one goal as OKRs. Long pasted notes can become several, up to the free slots. */
-    async rewriteGoal(index: number) {
-      const list = goalList();
-      const goal = list[index];
-      if (goal === undefined) throw new OsError('Goal not found');
-      const written = await okrs(goal, MAX_GOALS - list.length + 1);
-      writeGoals([...list.slice(0, index), ...written, ...list.slice(index + 1)]);
-      return { goals: goalList(), max: MAX_GOALS };
+    async removeWish(index: number) {
+      const list = savedWishes();
+      if (list[index] === undefined) throw new OsError('Wish not found');
+      store.setSetting('woop_wishes', JSON.stringify(list.filter((_, i) => i !== index)));
+      return { wishes: savedWishes() };
     },
 
     async saveEnergyPeak(peak: EnergyPeak) {
