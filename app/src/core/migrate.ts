@@ -96,8 +96,6 @@ export function migrateOldCopy(store: Store, old: OldCopy): { imported: boolean;
     for (const update of updates) store.addLedgerEntry(update.text, update.createdAt);
     if (goals?.trim()) store.setSetting('goals', goals);
     if (status?.selectedToolkits?.length) store.setSetting('selected_toolkits', JSON.stringify(status.selectedToolkits));
-    const model = status?.openrouterModel ?? status?.model;
-    if (model) store.setSetting('ai_model_openrouter', model);
     if (status?.timezone) store.setSetting('timezone', status.timezone);
     for (const s of schedules) store.addSchedule({ kind: s.kind, time: s.time, days: s.days, timezone: s.timezone, enabled: s.enabled });
     store.setSetting(DONE, new Date().toISOString());

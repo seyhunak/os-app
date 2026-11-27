@@ -8,9 +8,9 @@ describe('settings sections', () => {
     assert.equal(composioState({ composio: null }).configured, false);
   });
 
-  it('collapses OpenRouter with a key and a model', () => {
-    assert.deepEqual(modelState({ openrouter: 'saved', openrouterModel: 'cheap/model', model: 'cheap/model' }), { configured: true, summary: 'OpenRouter · cheap/model' });
-    assert.equal(modelState({ openrouter: null, model: 'x' }).configured, false);
+  it('collapses OpenRouter once a key is saved, naming the preset', () => {
+    assert.deepEqual(modelState({ openrouter: 'saved', preset: 'os-chat' }), { configured: true, summary: 'OpenRouter · os-chat' });
+    assert.deepEqual(modelState({ openrouter: null, preset: 'os-chat' }), { configured: false, summary: 'OpenRouter key needed' });
   });
 
 });

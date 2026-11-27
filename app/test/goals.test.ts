@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
-import { askSmall, compactNote, createOpenRouterComposer, MODELS, type ProgressStep } from '../src/core/compose';
+import { askSmall, compactNote, createOpenRouterComposer, type ProgressStep } from '../src/core/compose';
 import type { ComposioGateway } from '../src/core/composio';
 import { createOs } from '../src/core/os';
 import { parseBrief } from '../src/parseBrief';
@@ -44,17 +44,22 @@ describe('goals from before WOOP', () => {
 });
 
 describe('askSmall', () => {
-  it('asks for a small answer and falls down the list', async () => {
+  it('asks the preset for a small answer, and once more if OpenRouter was busy', async () => {
     const bodies: Array<Record<string, unknown>> = [];
     mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       bodies.push(body);
-      return body.model === MODELS[0] ? json({ error: { code: 503, message: 'busy' } }, 503) : json({ choices: [{ message: { content: 'ok' } }] });
+      return bodies.length === 1 ? json({ error: { code: 503, message: 'busy' } }, 503) : json({ choices: [{ message: { content: 'ok' } }] });
     });
-    const out = await askSmall({ apiKey: 'k', model: MODELS[0] }, { system: 's', user: 'u', maxTokens: 300, empty: 'nothing' }, (t) => t || null);
+    const out = await askSmall({ apiKey: 'k' }, { system: 's', user: 'u', maxTokens: 300, empty: 'nothing' }, (t) => t || null, { sleep: async () => undefined });
     assert.equal(out, 'ok');
-    assert.deepEqual(bodies.map((b) => b.model), [MODELS[0], MODELS[1]]);
+    assert.deepEqual(bodies.map((b) => b.model), ['@preset/os-chat', '@preset/os-chat']);
     assert.equal(bodies[0]!.max_tokens, 300);
+  });
+
+  it('gives up with the empty message when the answer has nothing usable', async () => {
+    mock.method(globalThis, 'fetch', async () => json({ choices: [{ message: { content: '' } }] }));
+    await assert.rejects(askSmall({ apiKey: 'k' }, { system: 's', user: 'u', maxTokens: 300, empty: 'nothing' }, (t) => t || null), /nothing/);
   });
 });
 
@@ -74,16 +79,20 @@ describe('brief progress', () => {
     assert.deepEqual(steps.at(-1), { key: 'finish', text: 'Brief ready', state: 'done' });
   });
 
-  it('says which model is tried and why one is passed over', async () => {
-    mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
-      const { model } = JSON.parse(String(init?.body));
-      return model === MODELS[0] ? json({ error: { code: 429, message: 'busy' } }, 429) : json({ choices: [{ message: { content: '# Good morning' } }] });
-    });
+  it('says the preset is asked, waits when OpenRouter is busy, and names the model that wrote it', async () => {
+    let calls = 0;
+    mock.method(globalThis, 'fetch', async () => (++calls === 1
+      ? json({ error: { code: 429, message: 'busy' } }, 429)
+      : json({ model: 'qwen/qwen3-30b-a3b-instruct-2507', choices: [{ message: { content: '# Good morning' } }] })));
     const steps: ProgressStep[] = [];
-    await createOpenRouterComposer('k', MODELS[0])({ kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} }, (s) => steps.push(s));
+    await createOpenRouterComposer('k', { sleep: async () => undefined })({ kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} }, (s) => steps.push(s));
     const texts = steps.map((s) => `${s.state}: ${s.text}`);
-    assert.ok(texts.includes('warn: Nemotron-3-ultra-550b-a55b is busy, trying the next one'), texts.join('\n'));
-    assert.ok(texts.some((t) => t.startsWith('done:')));
+    assert.deepEqual(texts, [
+      'running: Asking the os-chat preset to weigh everything against your goals',
+      'running: OpenRouter was busy. Waiting a few seconds, then trying again',
+      'done: Waited for OpenRouter, trying again',
+      'done: Qwen3-30b-a3b-instruct-2507 ranked your day and wrote the brief',
+    ]);
   });
 });
 
@@ -94,7 +103,7 @@ describe('focus', () => {
       system = JSON.parse(String(init?.body)).messages[0].content;
       return json({ choices: [{ message: { content: 'ok' } }] });
     });
-    await createOpenRouterComposer('k', 'm')({ kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} });
+    await createOpenRouterComposer('k')({ kind: 'morning', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} });
     assert.ok(system.includes('Never triage'));
     assert.ok(system.includes('Never put an [UNALIGNED] item in Focus'));
   });
@@ -125,7 +134,7 @@ describe('note for next brief', () => {
       system = JSON.parse(String(init?.body)).messages[0].content;
       return json({ choices: [{ message: { content: 'ok' } }] });
     });
-    await createOpenRouterComposer('k', 'm')({ kind: 'night', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} });
+    await createOpenRouterComposer('k')({ kind: 'night', date: 'd', timezone: 'UTC', goals: '', previousNote: null, updates: [], sources: [], facts: {} });
     assert.ok(system.includes('Under 50 words, terse fragments'));
     assert.ok(system.includes('use its progress as goal evidence'));
   });

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
 import { composioState, modelState } from '../settingsSummary';
-import { COMPOSIO_URL, type Api, type ModelOption, type Status } from '../api';
+import { COMPOSIO_URL, type Api, type Status } from '../api';
 import { ToolList } from '../ToolList';
+import { PRESET, PRESET_MODELS } from '../core/models';
 import { DEFAULT_ENERGY_PEAK, ENERGY_PEAK_LABEL, ENERGY_PEAK_PROFILE, ENERGY_PEAKS, type EnergyPeak } from '../core/compose';
 import { Button, Card, Chip, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
 
@@ -85,34 +86,9 @@ function DataSection({ api, onErased }: { api: Api; onErased(): void }) {
   );
 }
 
-/** Your OpenRouter key, and which of today's free models goes first. The rest are fallbacks, best first. */
+/** Your OpenRouter key. Every AI call goes to the os-chat preset, which picks the model and its backups. */
 function ModelSection({ api, status, onChanged }: { api: Api; status: Status; onChanged(): void }) {
   const c = useColors();
-  const savedModel = status.openrouterModel ?? status.model ?? '';
-  const [options, setOptions] = useState<ModelOption[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    api.aiModels().then((r) => { setOptions(r.models); setError(r.error); }, (e) => setError(message(e)));
-  }, [api]);
-
-  const choose = async (id: string) => {
-    if (id === savedModel) return;
-    setBusy(id);
-    setError(null);
-    try {
-      await api.saveAi(id);
-      onChanged();
-    } catch (e) {
-      setError(message(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  // The saved one first, then the rest best first: the order each brief tests them.
-  const ordered = [...options.filter((o) => o.id === savedModel), ...options.filter((o) => o.id !== savedModel)];
   return (
     <View style={{ gap: 10 }}>
       <KeyRow
@@ -126,25 +102,22 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
         onRemove={() => api.removeCredential('openrouter').then(onChanged)}
       />
       <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
-        These are today's free models on OpenRouter, best first. Before each brief OS asks OpenRouter again, tests the first one, and moves down the list until one answers. Tap one to put it first.
+        Every brief and suggestion goes to your OpenRouter preset "{PRESET}". It tries the first model, then the backups in order, using only the cheapest providers that don't keep prompts. Change it at openrouter.ai/settings/presets.
       </Text>
-      <View style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
-        {ordered.map((option, i) => (
-          <Pressable
-            key={option.id}
-            accessibilityRole="radio"
-            accessibilityLabel={`${option.id}, ${i === 0 ? 'used first' : `fallback ${i}`}`}
-            accessibilityState={{ selected: i === 0, busy: busy === option.id }}
-            disabled={busy !== null}
-            onPress={() => void choose(option.id)}
+      <View accessibilityRole="list" style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
+        {PRESET_MODELS.map((id, i) => (
+          <View
+            key={id}
+            accessible
+            accessibilityLabel={`${id}, ${i === 0 ? 'main model' : `backup ${i}`}`}
             style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: i ? 1 : 0, borderColor: c.line }}
           >
             <Text style={{ width: 22, color: i === 0 ? c.accent : c.muted, fontFamily: F.mono, fontSize: 13 }}>{String(i + 1).padStart(2, '0')}</Text>
-            <Text style={{ flexShrink: 1, color: i === 0 ? c.accent : c.text, fontFamily: F.sansMedium, fontSize: 15 }}>{option.id}</Text>
-          </Pressable>
+            <Text style={{ flexShrink: 1, color: i === 0 ? c.accent : c.text, fontFamily: F.sansMedium, fontSize: 15 }}>{id}</Text>
+            <Text style={{ marginLeft: 'auto', color: c.muted, fontFamily: F.sans, fontSize: 13 }}>{i === 0 ? 'Main' : 'Backup'}</Text>
+          </View>
         ))}
       </View>
-      <ErrorNote message={error} />
     </View>
   );
 }

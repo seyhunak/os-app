@@ -10,29 +10,12 @@ export function timeoutSignal(ms: number): AbortSignal {
 }
 
 export const SOURCES_MARKER = '{{SOURCES}}';
-import { BRIEF_TOKENS, BUILT_IN_MODELS, describeModel, fetchFreeModels, FREE_ROUTER, OPENROUTER_URL, orderFor, requestFor, type FreeModel } from './models';
+import { BRIEF_TOKENS, isMainModel, MAIN_MODEL, modelName, OPENROUTER_URL, PRESET, PRESET_MODEL } from './models';
 
-/**
- * The free models OS shipped with. Each brief asks OpenRouter for today's free models instead, and
- * these are used only when that list can't be read and no copy of it was kept.
- */
-export const MODELS = BUILT_IN_MODELS.map((m) => m.id);
-export const DEFAULT_MODEL: string = MODELS[0]!;
-export const isAllowedModel = (id: string, known: readonly string[] = MODELS) => known.includes(id);
-/** Your model first, then the others in the list's order. A model not on the list is ignored. */
-export const modelChain = (model: string, known: readonly string[] = MODELS): string[] => (isAllowedModel(model, known) ? [model, ...known.filter((m) => m !== model)] : [...known]);
+export { modelName };
 export type Provider = 'openrouter';
-/** Where the last list of free models OpenRouter gave is kept, for when it can't be reached. */
-export interface ModelCatalog {
-  cached(): FreeModel[] | null;
-  save(models: FreeModel[]): void;
-}
-export interface AiConfig { provider: 'openrouter'; apiKey: string; model: string; catalog?: ModelCatalog }
-export interface ModelOption {
-  id: string;
-  /** "Used first" for the first, then where it falls in the fallback order. */
-  note: string | null;
-}
+/** Every call goes to the os-chat preset, so only the key is needed. */
+export interface AiConfig { provider: 'openrouter'; apiKey: string }
 /** Caps what one brief can cost, since the key has a budget. */
 const MAX_OUTPUT_TOKENS = BRIEF_TOKENS;
 
@@ -77,9 +60,6 @@ export interface ProgressStep {
 export type OnProgress = (step: ProgressStep) => void;
 
 export type Composer = (input: BriefInput, progress?: OnProgress) => Promise<string>;
-
-/** "google/gemma-4-31b-it:free" reads as "gemma-4-31b-it". */
-export const modelName = (id: string) => (id.split('/').pop() ?? id).replace(/:free$/, '');
 
 /** The note is asked for in this many words; reading it back is capped a little above, in case the model runs long. */
 const NOTE_WORDS = 50;
@@ -252,6 +232,8 @@ export class OpenRouterError extends Error {
 }
 
 interface ChatCompletion {
+  /** The model that answered, which the preset chose. */
+  model?: string;
   choices?: Array<{ finish_reason?: string; message?: { content?: string | null } }>;
   error?: { message?: string; code?: number; metadata?: { headers?: Record<string, string> } };
 }
@@ -267,206 +249,132 @@ function failure(response: Response, data: ChatCompletion): OpenRouterError {
   });
 }
 
-/**
- * Today's free requests are used up. Every free model shares that limit, so trying another one
- * only spends time. OpenRouter names it "free-models-per-day"; a limit that lifts more than
- * 15 minutes from now, with none left, is read the same way.
- */
-export const isDailyLimit = (error: unknown, now = Date.now()) =>
-  error instanceof OpenRouterError && error.status === 429
-  && (/per[- ]day/i.test(error.message) || (error.remaining === '0' && error.resetAt !== null && error.resetAt - now > 15 * 60_000));
-
-/** Busy or rate-limited providers usually free up within seconds, so a whole pass of these is worth one more go. */
+/** Busy or rate-limited providers usually free up within seconds, so these are worth one more go. */
 const isRetryable = (error: unknown) => error instanceof OpenRouterError && (error.status === 429 || error.status === 502 || error.status === 503);
-/** These fail the same way on every model, so trying the next one is pointless. */
-const stopsChain = (error: unknown) => isDailyLimit(error) || (error instanceof OpenRouterError && (error.status === 401 || (error.status === 403 && /injection/i.test(error.message))));
-/** No provider of this model meets the "don't keep prompts" rule. */
-export const isPolicyError = (error: unknown) => error instanceof OpenRouterError && error.status === 404 && /data policy|no endpoints/i.test(error.message);
-/** Waits before a second pass, when every model in the first was only busy. */
+/** The preset isn't in the account the key belongs to. */
+export const isMissingPreset = (error: unknown) => error instanceof OpenRouterError && (error.status === 400 || error.status === 404) && /preset/i.test(error.message);
+/** No provider of the preset's models meets its rules: no prompt logging, the price cap, every parameter supported. */
+export const isPolicyError = (error: unknown) => error instanceof OpenRouterError && error.status === 404 && /data policy|no endpoints|max.?price|parameters/i.test(error.message);
+/** Waits before the one retry, when OpenRouter or every provider was only busy. */
 export const RETRY_DELAYS_MS = [3_000];
-/** Free models are often slow when busy, so each gets this long before the next one is tried. */
-const FREE_TIMEOUT_MS = 90_000;
-/** At most this many models are asked to write one brief, so a bad day can't take an hour. */
-export const CHAIN_LENGTH = 6;
-/** Tool data can include email, so providers that train on or keep prompts are skipped, unless no other answered. */
-const providerRule = (allowLogging: boolean) => (allowLogging ? {} : { provider: { data_collection: 'deny' } });
+const BRIEF_TIMEOUT_MS = 90_000;
 
-export const LOGGING_NOTICE = "> Sent to a free provider that may keep prompts, because no provider that doesn't answered. Your tool data was redacted first.";
-
-export interface ComposerOptions {
-  sleep?: (ms: number) => Promise<void>;
-  /** The models to try, in order, after the check found which answer. Defaults to the whole chain. */
-  chain?: string[];
-  /** What OpenRouter said about each model, which sets how each is asked. */
-  models?: FreeModel[];
-  /** True when only providers that may keep prompts answered the check. */
-  allowLogging?: boolean;
+export interface ChatRequest {
+  system: string;
+  user: string;
+  maxTokens: number;
+  timeoutMs: number;
 }
 
 /**
- * Tries your model, then the other models in order, until one writes the brief.
- * A brief written by a fallback says which one wrote it.
+ * One chat call to the os-chat preset. The preset picks the model, falls back to its backups and
+ * applies its provider rules, so the request names no model or provider of its own.
  */
-export function createOpenRouterComposer(apiKey: string, model: string, options: ComposerOptions = {}): Composer {
-  const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const known = options.models ?? BUILT_IN_MODELS;
-  const allowLogging = options.allowLogging ?? false;
-  return async (input, progress) => {
-    // Thinking spends the room the brief needs, so it's off where it can be. A model that thinks
-    // anyway, or ran out of room, is asked again with thinking kept light and out of the answer.
-    const send = async (id: string, roomy = false): Promise<string> => {
-      const { reasoning, maxTokens } = requestFor(describeModel(id, known), roomy);
-      const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-        signal: timeoutSignal(FREE_TIMEOUT_MS),
-        body: JSON.stringify({
-          model: id,
-          max_tokens: maxTokens,
-          reasoning,
-          ...providerRule(allowLogging),
-          messages: [
-            { role: 'system', content: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}` },
-            { role: 'user', content: renderUserPrompt(input) },
-          ],
-        }),
-      });
-      const data = (await response.json().catch(() => ({}))) as ChatCompletion;
-      if (!response.ok || data.error) {
-        const status = data.error?.code ?? response.status;
-        if (status === 400 && !roomy && /reasoning/i.test(data.error?.message ?? '')) return send(id, true);
-        throw failure(response, data);
-      }
-      const choice = data.choices?.[0];
-      if (choice?.finish_reason === 'content_filter') throw new Error('the AI model declined this brief');
-      if (choice?.finish_reason === 'length') {
-        if (!roomy) {
-          progress?.({ key: `room:${id}`, text: `${capitalize(modelName(id))} ran out of room, asking again with more`, state: 'warn' });
-          return send(id, true);
-        }
-        throw new Error('the AI model ran out of output tokens');
-      }
-      // The provider failed partway, so whatever came back is a partial brief.
-      if (choice?.finish_reason === 'error') throw new Error('the AI model stopped partway through');
-      const text = (choice?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-      if (!text) throw new Error('the AI model returned an empty brief');
-      return text;
-    };
+export async function chat(apiKey: string, request: ChatRequest): Promise<{ text: string; model: string | null; finish: string | null }> {
+  const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
+    signal: timeoutSignal(request.timeoutMs),
+    body: JSON.stringify({
+      model: PRESET_MODEL,
+      max_tokens: request.maxTokens,
+      messages: [
+        { role: 'system', content: request.system },
+        { role: 'user', content: request.user },
+      ],
+    }),
+  });
+  const data = (await response.json().catch(() => ({}))) as ChatCompletion;
+  if (!response.ok || data.error) throw failure(response, data);
+  const choice = data.choices?.[0];
+  return {
+    text: (choice?.message?.content ?? '').replace(/<think>[\s\S]*?<\/think>/g, '').trim(),
+    model: data.model ?? null,
+    finish: choice?.finish_reason ?? null,
+  };
+}
 
-    const chain = options.chain?.length ? options.chain : modelChain(model);
-    // A fallback is named against the model you chose, even when the check skipped it.
-    const first = options.chain?.length ? (options.chain.includes(model) ? model : options.chain[0]!) : modelChain(model)[0]!;
-    const errors: unknown[] = [];
-    for (let pass = 0; ; pass++) {
-      errors.length = 0;
-      for (const id of chain) {
-        const key = `model:${allowLogging ? 'open:' : ''}${pass}:${id}`;
-        const name = modelName(id);
-        progress?.({ key, text: `Asking ${name} to weigh everything against your goals`, state: 'running' });
-        try {
-          const text = await send(id);
-          progress?.({ key, text: `${capitalize(name)} ranked your day and wrote the brief`, state: 'done' });
-          const notices = [
-            ...(id === first ? [] : [`> Written by ${id}, a fallback, because ${modelName(first)} couldn't write it.`]),
-            ...(allowLogging ? [LOGGING_NOTICE] : []),
-          ];
-          if (!notices.length) return text;
-          const notice = notices.join('\n');
-          return /^# .*\n/.test(text) ? text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${text}`;
-        } catch (error) {
-          progress?.({ key, text: `${capitalize(name)} ${whyFailed(error)}${stopsChain(error) ? '' : ', trying the next one'}`, state: 'warn' });
-          if (stopsChain(error)) throw error;
-          errors.push(error);
-        }
-      }
-      if (!errors.every(isRetryable) || pass >= RETRY_DELAYS_MS.length) break;
-      progress?.({ key: `wait:${pass}`, text: 'Every model was busy. Waiting a few seconds, then trying again', state: 'running' });
+/** Runs `attempt`, and once more after a short wait if OpenRouter was only busy. */
+async function withRetry<T>(attempt: () => Promise<T>, sleep: (ms: number) => Promise<void>, onWait?: (pass: number, state: 'running' | 'done') => void): Promise<T> {
+  for (let pass = 0; ; pass++) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!isRetryable(error) || pass >= RETRY_DELAYS_MS.length) throw error;
+      onWait?.(pass, 'running');
       await sleep(RETRY_DELAYS_MS[pass]!);
-      progress?.({ key: `wait:${pass}`, text: 'Waited for busy models, trying again', state: 'done' });
+      onWait?.(pass, 'done');
     }
-    // A failure other than "busy" says most about why nothing worked, such as a guardrail.
-    const telling = errors.find((e) => !(e instanceof OpenRouterError && e.status === 429)) ?? errors.at(-1);
-    throw new ChainError(telling, errors.length);
+  }
+}
+
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export interface ComposerOptions {
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/** Has the os-chat preset write the brief. A brief written by a backup model says which one. */
+export function createOpenRouterComposer(apiKey: string, options: ComposerOptions = {}): Composer {
+  const sleep = options.sleep ?? defaultSleep;
+  return async (input, progress) => {
+    const key = 'model:brief';
+    progress?.({ key, text: `Asking the ${PRESET} preset to weigh everything against your goals`, state: 'running' });
+    try {
+      const answer = await withRetry(async () => {
+        const { text, model, finish } = await chat(apiKey, {
+          system: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}`,
+          user: renderUserPrompt(input),
+          maxTokens: MAX_OUTPUT_TOKENS,
+          timeoutMs: BRIEF_TIMEOUT_MS,
+        });
+        if (finish === 'content_filter') throw new Error('the AI model declined this brief');
+        if (finish === 'length') throw new Error('the AI model ran out of output tokens');
+        // The provider failed partway, so whatever came back is a partial brief.
+        if (finish === 'error') throw new Error('the AI model stopped partway through');
+        if (!text) throw new Error('the AI model returned an empty brief');
+        return { text, model };
+      }, sleep, (pass, state) => progress?.({
+        key: `wait:${pass}`,
+        text: state === 'running' ? 'OpenRouter was busy. Waiting a few seconds, then trying again' : 'Waited for OpenRouter, trying again',
+        state,
+      }));
+      const writer = answer.model ? modelName(answer.model) : PRESET;
+      progress?.({ key, text: `${capitalize(writer)} ranked your day and wrote the brief`, state: 'done' });
+      if (isMainModel(answer.model)) return answer.text;
+      const notice = `> Written by ${answer.model}, a backup in the ${PRESET} preset, because ${modelName(MAIN_MODEL)} couldn't write it.`;
+      return /^# .*\n/.test(answer.text) ? answer.text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${answer.text}`;
+    } catch (error) {
+      progress?.({ key, text: `The ${PRESET} preset ${whyFailed(error)}`, state: 'warn' });
+      throw error;
+    }
   };
 }
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** A few words on why one model didn't write the brief, for the progress view. */
+/** A few words on why the preset didn't write the brief, for the progress view. */
 function whyFailed(error: unknown): string {
-  if (isDailyLimit(error)) return "hit today's limit on free OpenRouter requests, which every free model shares";
-  if (isPolicyError(error)) return "has no provider that doesn't keep prompts";
+  if (isMissingPreset(error)) return "isn't set up in your OpenRouter account";
+  if (isPolicyError(error)) return 'has no provider that meets its privacy and price rules';
   if (error instanceof OpenRouterError) {
     if (error.status === 429 || error.status === 502 || error.status === 503) return 'is busy';
     if (error.status === 401) return "couldn't be used: the OpenRouter key was rejected";
     if (error.status === 402) return 'needs credit on your OpenRouter key';
     if (error.status === 403) return 'was blocked by your OpenRouter guardrail';
-    if (error.status === 404) return 'is not available';
     return "couldn't write it";
   }
   if (error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError')) return 'took too long';
   return "couldn't write it";
 }
 
-/** Every model in the chain failed. Carries the error that best explains why. */
-export class ChainError extends Error {
-  constructor(readonly cause: unknown, readonly tried: number) {
-    super(cause instanceof Error ? cause.message : 'every AI model failed');
-  }
-}
-
 const CHECK_TIMEOUT_MS = 15_000;
-const PING_TIMEOUT_MS = 20_000;
-/** At most this many models are tested, per privacy rule, before giving up. Each test is one free request. */
-export const PING_LIMIT = 5;
 
-export interface Prepared {
-  /** The model that answered first, then its fallbacks, in order. */
-  chain: string[];
-  models: FreeModel[];
-  allowLogging: boolean;
-}
-
-/**
- * One tiny request, with nothing of yours in it, to see if a model answers before the brief is sent.
- * A cut-off answer still counts: it answered.
- */
-export async function pingModel(apiKey: string, model: FreeModel, allowLogging: boolean): Promise<void> {
-  const ask = async (roomy: boolean): Promise<void> => {
-    const { reasoning } = requestFor(model, roomy);
-    const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-      signal: timeoutSignal(PING_TIMEOUT_MS),
-      body: JSON.stringify({
-        model: model.id,
-        max_tokens: roomy || model.reasoning.mandatory ? 512 : 16,
-        reasoning,
-        ...providerRule(allowLogging),
-        messages: [{ role: 'user', content: 'Reply with the word OK.' }],
-      }),
-    });
-    const data = (await response.json().catch(() => ({}))) as ChatCompletion;
-    if (!response.ok || data.error) {
-      const status = data.error?.code ?? response.status;
-      if (status === 400 && !roomy && /reasoning/i.test(data.error?.message ?? '')) return ask(true);
-      throw failure(response, data);
-    }
-    if (!data.choices?.length) throw new Error('the AI model returned nothing');
-  };
-  await ask(false);
-}
-
-/**
- * Before a brief, in order: checks the OpenRouter key, asks OpenRouter which models are free today,
- * ranks them best first, then tests them one by one until one answers. Providers that don't keep
- * prompts are tested first; only if none answers are providers that may keep them tested.
- * The brief then goes to the model that answered, with the ones after it as fallbacks.
- */
-export async function prepareModels(apiKey: string, model: string, catalog?: ModelCatalog, progress?: OnProgress): Promise<Prepared> {
+/** Checks the OpenRouter key, then has the os-chat preset write the brief. */
+export const createComposer = (config: AiConfig, options: ComposerOptions = {}): Composer => async (input, progress) => {
   progress?.({ key: 'check:key', text: 'Checking your OpenRouter key', state: 'running' });
   try {
-    await verifyOpenRouterKey(apiKey);
+    await verifyOpenRouterKey(config.apiKey);
     progress?.({ key: 'check:key', text: 'OpenRouter accepted your key', state: 'done' });
   } catch (error) {
     const rejected = error instanceof OpenRouterError && (error.status === 401 || error.status === 403);
@@ -474,71 +382,11 @@ export async function prepareModels(apiKey: string, model: string, catalog?: Mod
       progress?.({ key: 'check:key', text: rejected ? 'OpenRouter rejected your key' : "OpenRouter couldn't be reached", state: 'warn' });
       throw rejected ? new OpenRouterError(401, 'key rejected') : error;
     }
-    // OpenRouter answered but had trouble of its own, so the models are still worth a try.
+    // OpenRouter answered but had trouble of its own, so the brief is still worth a try.
     progress?.({ key: 'check:key', text: `OpenRouter couldn't check your key (${error.status}), trying anyway`, state: 'warn' });
   }
-
-  progress?.({ key: 'check:models', text: 'Asking OpenRouter which models are free today', state: 'running' });
-  let models: FreeModel[];
-  try {
-    models = await fetchFreeModels(timeoutSignal(CHECK_TIMEOUT_MS));
-    if (!models.length) throw new Error('OpenRouter lists no free models right now');
-    catalog?.save(models);
-    progress?.({ key: 'check:models', text: `OpenRouter has ${models.length} free models that can write a brief`, state: 'done' });
-  } catch (error) {
-    const kept = catalog?.cached();
-    models = kept?.length ? kept : BUILT_IN_MODELS;
-    progress?.({ key: 'check:models', text: `Couldn't get today's free models (${error instanceof Error ? error.message : String(error)}), so using ${kept?.length ? 'the last list' : 'the built-in list'}`, state: 'warn' });
-  }
-  const ranked = orderFor(models, model);
-  const ids = [...ranked.map((m) => m.id), FREE_ROUTER];
-  const byId = new Map([...ranked, describeModel(FREE_ROUTER)].map((m) => [m.id, m]));
-
-  let lastError: unknown = null;
-  for (const allowLogging of [false, true]) {
-    if (allowLogging) progress?.({ key: 'check:open', text: "No provider that doesn't keep prompts answered, so testing free providers that may keep them", state: 'warn' });
-    let tested = 0;
-    for (const [i, id] of ids.entries()) {
-      if (tested >= PING_LIMIT) break;
-      tested++;
-      const key = `check:ping:${allowLogging ? 'open:' : ''}${id}`;
-      const name = modelName(id);
-      progress?.({ key, text: `Testing ${name}${i === 0 ? ', the best free model' : ''}`, state: 'running' });
-      try {
-        await pingModel(apiKey, byId.get(id)!, allowLogging);
-        progress?.({ key, text: `${capitalize(name)} answered, so it writes the brief`, state: 'done' });
-        return { chain: ids.slice(i, i + CHAIN_LENGTH), models: ranked, allowLogging };
-      } catch (error) {
-        progress?.({ key, text: `${capitalize(name)} ${whyFailed(error)}${stopsChain(error) ? '' : ', testing the next one'}`, state: 'warn' });
-        if (stopsChain(error)) throw error;
-        lastError = error;
-      }
-    }
-  }
-  throw new ChainError(lastError, PING_LIMIT * 2);
-}
-
-/**
- * Checks the key, finds today's free models, tests them in order, then has the one that answered
- * write the brief. If every privacy-safe model then fails, the brief goes once more to providers
- * that may keep prompts, rather than coming out unranked.
- */
-export const createComposer = (config: AiConfig): Composer => async (input, progress) => {
-  const prepared = await prepareModels(config.apiKey, config.model, config.catalog, progress);
-  const compose = (allowLogging: boolean) =>
-    createOpenRouterComposer(config.apiKey, config.model, { chain: prepared.chain, models: prepared.models, allowLogging })(input, progress);
-  try {
-    return await compose(prepared.allowLogging);
-  } catch (error) {
-    if (prepared.allowLogging || stopsChain(error)) throw error;
-    progress?.({ key: 'check:open', text: "No provider that doesn't keep prompts could write it, so trying free providers that may keep them", state: 'warn' });
-    return compose(true);
-  }
+  return createOpenRouterComposer(config.apiKey, options)(input, progress);
 };
-
-/** The models Settings offers, best first, with your model first when it's still free. */
-export const modelOptions = (models: FreeModel[] = BUILT_IN_MODELS, preferred: string | null = null): ModelOption[] =>
-  orderFor(models, preferred).map((m, i) => ({ id: m.id, note: i === 0 ? 'Used first' : `Fallback ${i}` }));
 
 export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
   const response = await fetch(`${OPENROUTER_URL}/key`, {
@@ -549,22 +397,14 @@ export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
 }
 
 export function describeComposeError(error: unknown): string {
-  if (error instanceof ChainError) {
-    const reason = describeComposeError(error.cause);
-    return error.tried > 1 ? `every model on the list was busy or unavailable, and ${reason}` : reason;
-  }
-  if (isDailyLimit(error)) {
-    const { resetAt } = error as OpenRouterError;
-    const when = resetAt ? ` They come back at ${new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(resetAt))}.` : ' They come back at midnight UTC.';
-    return `today's free OpenRouter requests are used up: a key with no credit gets 50 a day, shared by every free model.${when} Adding $10 of credit on OpenRouter raises the limit to 1,000 a day, and free models still cost nothing`;
-  }
+  if (isMissingPreset(error)) return `OpenRouter has no preset named "${PRESET}" for this key. Create it at openrouter.ai/settings/presets, as SETUP.md describes`;
   if (error instanceof OpenRouterError) {
     if (error.status === 401) return 'the OpenRouter API key was rejected';
     if (error.status === 403 && /injection/i.test(error.message)) return "your OpenRouter guardrail flagged possible prompt injection in today's tool data";
-    if (error.status === 404 && /guardrail/i.test(error.message)) return "your OpenRouter guardrail doesn't allow this model";
-    if (isPolicyError(error)) return "no free provider would take the brief under your OpenRouter privacy settings. Allow free endpoints that may train on inputs at openrouter.ai/settings/privacy";
-    if (error.status === 402) return 'the OpenRouter key is out of credit or over its budget for paid models';
-    if (error.status === 429) return "the model's provider is rate limiting it. Try again in a minute, or choose another model in Settings";
+    if (error.status === 404 && /guardrail/i.test(error.message)) return `your OpenRouter guardrail doesn't allow the ${PRESET} preset's models`;
+    if (isPolicyError(error)) return `no provider of the ${PRESET} preset's models meets its rules (no prompt logging, the price cap, every parameter supported)`;
+    if (error.status === 402) return 'the OpenRouter key is out of credit or over its budget';
+    if (error.status === 429) return 'OpenRouter is rate limiting the key. Try again in a minute';
     return `OpenRouter returned an error (${error.status})`;
   }
   if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError' || error.name === 'TypeError')) return "OpenRouter couldn't be reached";
@@ -610,54 +450,22 @@ export function renderSources(sources: SourceReport[]): string {
 const SMALL_TIMEOUT_MS = 45_000;
 
 /**
- * One short request: your model first, then the other models on the list. `parse` returns null when the answer
- * has nothing usable, which moves on to the next model. Used by the WOOP helpers.
+ * One short request to the os-chat preset, retried once if OpenRouter was busy. `parse` returns
+ * null when the answer has nothing usable. Used by the WOOP helpers.
  */
 export async function askSmall<T>(
-  config: Pick<AiConfig, 'apiKey' | 'model' | 'catalog'>,
+  config: Pick<AiConfig, 'apiKey'>,
   prompt: { system: string; user: string; maxTokens: number; empty: string; timeoutMs?: number },
   parse: (text: string) => T | null,
+  options: ComposerOptions = {},
 ): Promise<T> {
-  const body = (id: string, reasoning: Record<string, boolean | string>) => JSON.stringify({
-    model: id,
-    max_tokens: prompt.maxTokens,
-    reasoning,
-    provider: { data_collection: 'deny' },
-    messages: [
-      { role: 'system', content: prompt.system },
-      { role: 'user', content: prompt.user },
-    ],
-  });
-  let lastError: unknown = null;
-  // The last list of free models OpenRouter gave, best first, else the built-in one.
-  const kept = config.catalog?.cached();
-  const chain = kept?.length ? orderFor(kept, config.model).map((m) => m.id).slice(0, CHAIN_LENGTH) : modelChain(config.model);
-  for (const id of chain) {
-    try {
-      const ask = async (reasoning: Record<string, boolean | string>): Promise<ChatCompletion> => {
-        const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
-          method: 'POST',
-          headers: { Authorization: `Bearer ${config.apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
-          signal: timeoutSignal(prompt.timeoutMs ?? SMALL_TIMEOUT_MS),
-          body: body(id, reasoning),
-        });
-        const data = (await response.json().catch(() => ({}))) as ChatCompletion;
-        if (!response.ok || data.error) {
-          const status = data.error?.code ?? response.status;
-          if (status === 400 && reasoning.enabled === false && /reasoning/i.test(data.error?.message ?? '')) return ask({ effort: 'low', exclude: true });
-          throw failure(response, data);
-        }
-        return data;
-      };
-      const parsed = parse((await ask({ enabled: false })).choices?.[0]?.message?.content ?? '');
-      if (parsed !== null) return parsed;
-      lastError = new Error(prompt.empty);
-    } catch (error) {
-      if (stopsChain(error)) throw error;
-      lastError = error;
-    }
-  }
-  throw lastError ?? new Error(prompt.empty);
+  const { text } = await withRetry(
+    () => chat(config.apiKey, { system: prompt.system, user: prompt.user, maxTokens: prompt.maxTokens, timeoutMs: prompt.timeoutMs ?? SMALL_TIMEOUT_MS }),
+    options.sleep ?? defaultSleep,
+  );
+  const parsed = parse(text);
+  if (parsed === null) throw new Error(prompt.empty);
+  return parsed;
 }
 
 /** Text placed inside a data tag in a prompt, so it can't close the tag. */

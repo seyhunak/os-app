@@ -1,8 +1,8 @@
 import { BriefService, selectedToolkits } from './briefs';
 import { TOOLKITS, toolkitBySlug } from './collectors';
 import type { ComposioGateway, ConnectedAccount } from './composio';
-import { createComposer, DEFAULT_ENERGY_PEAK, isEnergyPeak, timeoutSignal, type EnergyPeak, describeComposeError, modelOptions, type AiConfig, type Composer, type ModelCatalog, type ModelOption, type OnProgress } from './compose';
-import { BUILT_IN_MODELS, fetchFreeModels, orderFor, type FreeModel } from './models';
+import { createComposer, DEFAULT_ENERGY_PEAK, isEnergyPeak, type EnergyPeak, describeComposeError, type AiConfig, type Composer, type OnProgress } from './compose';
+import { MAIN_MODEL, PRESET } from './models';
 import type { Brief, Kind, Schedule, Store } from './db';
 import { redact } from './redact';
 import { dueSchedule, nextRun } from './schedule';
@@ -70,31 +70,9 @@ export function createOs(deps: OsDeps) {
   const now = () => deps.now?.() ?? new Date();
   const composioKey = () => store.getSecret('composio');
   const openRouterKey = () => store.getSecret('openrouter');
-  /** The last list of free models OpenRouter gave. Each brief asks again and keeps the answer here. */
-  const catalog: ModelCatalog = {
-    cached: () => {
-      const saved = store.getSetting('openrouter_free_models');
-      try {
-        const list = saved ? (JSON.parse(saved) as { models?: FreeModel[] }).models : null;
-        return Array.isArray(list) && list.length ? list : null;
-      } catch {
-        return null;
-      }
-    },
-    save: (models) => store.setSetting('openrouter_free_models', JSON.stringify({ at: now().toISOString(), models })),
-  };
-  const knownModels = (): FreeModel[] => catalog.cached() ?? BUILT_IN_MODELS;
-  /**
-   * Your first model, when it's still free. A model you never chose, or one that's gone, such as a
-   * paid one saved before, gives way to the best free model.
-   */
-  const openRouterModel = () => {
-    const saved = store.getSetting('ai_model_openrouter');
-    return orderFor(knownModels(), saved)[0]?.id ?? BUILT_IN_MODELS[0]!.id;
-  };
   const aiConfig = (): AiConfig | null => {
     const apiKey = openRouterKey();
-    return apiKey ? { provider: 'openrouter', apiKey, model: openRouterModel(), catalog } : null;
+    return apiKey ? { provider: 'openrouter', apiKey } : null;
   };
   const gateway = () => {
     const key = composioKey();
@@ -187,8 +165,8 @@ export function createOs(deps: OsDeps) {
         composioHint: lastFour(composioKey()),
         openrouterHint: lastFour(openRouterKey()),
         provider: 'openrouter' as const,
-        model: openRouterModel(),
-        openrouterModel: openRouterModel(),
+        preset: PRESET,
+        model: MAIN_MODEL,
         timezone: store.getSetting('timezone'),
         energyPeak: energyPeak(),
         selectedToolkits: selectedToolkits(store),
@@ -226,26 +204,6 @@ export function createOs(deps: OsDeps) {
       store.deleteSecret(name);
       if (name === 'composio') forgetAccounts();
       return { ok: true };
-    },
-
-    /** Chooses which of today's free models goes first. The others stay as fallbacks, best first. */
-    async saveAi(model: string) {
-      const id = model.trim();
-      if (!knownModels().some((m) => m.id === id)) throw new OsError('Choose one of the listed models');
-      store.setSetting('ai_model_openrouter', id);
-      return { provider: 'openrouter' as const, model: id };
-    },
-
-    /** Today's free models from OpenRouter, best first. Its list is public, so no key is needed. */
-    async aiModels(): Promise<{ models: ModelOption[]; error: string | null }> {
-      let error: string | null = null;
-      try {
-        const models = await fetchFreeModels(timeoutSignal(15_000), now());
-        if (models.length) catalog.save(models);
-      } catch {
-        error = `Couldn't get today's free models from OpenRouter, so this is ${catalog.cached() ? 'the last list' : 'the built-in list'}.`;
-      }
-      return { models: modelOptions(knownModels(), openRouterModel()), error };
     },
 
     async toolkits(fresh = false) {
