@@ -3,7 +3,7 @@ import { afterEach, describe, it, mock } from 'node:test';
 import { endOfWeek, toolkitBySlug } from '../src/core/collectors';
 import { RateLimitError, type ComposioGateway, type ProxyRequest } from '../src/core/composio';
 import {
-  briefPrompt, createComposer, createOpenRouterComposer, describeComposeError, extractNote, extractSourceSummaries,
+  briefPrompt, createComposer, createOpenRouterComposer, describeComposeError, extractNote, extractSourceSummaries, fetchCredits, OpenRouterError, type AiRoute,
   renderUserPrompt, SOURCES_MARKER, type AiConfig, type BriefInput, type Composer, type ProgressStep,
 } from '../src/core/compose';
 import type { Kind, Store } from '../src/core/db';
@@ -123,7 +123,53 @@ describe('the os-chat preset', () => {
     });
     like(await os.status(), { provider: 'openrouter', preset: 'os-chat', model: 'qwen/qwen3-30b-a3b-instruct-2507' });
     await os.generateBrief('morning');
-    assert.deepEqual(seen.at(-1), { provider: 'openrouter', apiKey: 'sk-or-test-key' });
+    like(seen.at(-1)!, { provider: 'openrouter', apiKey: 'sk-or-test-key' });
+    assert.deepEqual(Object.keys(seen.at(-1)!).sort(), ['apiKey', 'onRoute', 'provider']);
+  });
+
+  it('remembers how the last call was answered, and Settings reads it with the credit left', async () => {
+    const store = newStore();
+    store.setSecret('openrouter', 'sk-or-test-key');
+    let credit: number | Error = 0;
+    const os = createOs({
+      store, createGateway: () => fakeGateway().gateway, now: () => NOW,
+      fetchCredits: async () => { if (credit instanceof Error) throw credit; return credit; },
+      createComposer: (config) => async () => { config.onRoute?.({ via: 'free', model: 'acme/x:free', task: 'brief' }); return '# Good morning'; },
+    });
+    assert.deepEqual(await os.aiStatus(), { lastRoute: null, credit: 0, creditError: null, keyRejected: false });
+    await os.generateBrief('morning');
+    like(await os.aiStatus(), { lastRoute: { via: 'free', model: 'acme/x:free', task: 'brief', at: NOW.toISOString() }, credit: 0 });
+    credit = new OpenRouterError(401, 'No auth credentials found');
+    like(await os.aiStatus(), { credit: null, creditError: 'the OpenRouter API key was rejected', keyRejected: true });
+    // Removing the key forgets the route.
+    await os.removeCredential('openrouter');
+    assert.equal((await os.aiStatus()).lastRoute, null);
+  });
+
+  it('reports each route: main model, backup, free router, and both failing', async () => {
+    const routes: AiRoute[] = [];
+    const onRoute = (r: AiRoute) => routes.push(r);
+    stubFetch(async () => brief('# Good morning\n\nBody', MAIN_MODEL));
+    await createOpenRouterComposer('k', { onRoute })(input);
+    mock.restoreAll();
+    stubFetch(async () => brief('# Good morning\n\nBody', 'google/gemma-3-12b-it'));
+    await createOpenRouterComposer('k', { onRoute })(input);
+    mock.restoreAll();
+    stubFetch(async (_url, init) => (JSON.parse(String(init?.body)).model === '@preset/os-chat' ? json({ error: { code: 402, message: 'credits' } }, 402) : brief('# Good morning\n\nBody', 'acme/x:free')));
+    await createOpenRouterComposer('k', { onRoute })(input);
+    mock.restoreAll();
+    stubFetch(async () => json({ error: { code: 402, message: 'credits' } }, 402));
+    await createOpenRouterComposer('k', { onRoute })(input).catch(() => undefined);
+    assert.deepEqual(routes.map((r) => [r.via, r.model]), [['preset', MAIN_MODEL], ['backup', 'google/gemma-3-12b-it'], ['free', 'acme/x:free'], ['failed', null]]);
+    assert.match(routes[3]!.reason!, /out of credit.*no free model could write it either/);
+  });
+
+  it('reads the credit left as credits bought minus credits used', async () => {
+    stubFetch(async (url) => { assert.equal(String(url), 'https://openrouter.ai/api/v1/credits'); return json({ data: { total_credits: 10, total_usage: 7.25 } }); });
+    assert.equal(await fetchCredits('k'), 2.75);
+    mock.restoreAll();
+    stubFetch(async () => json({ data: { total_credits: 0, total_usage: 0.01 } }));
+    assert.equal(await fetchCredits('k'), 0);
   });
 
   it('mirrors the preset set up in OpenRouter', () => {

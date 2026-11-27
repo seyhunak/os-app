@@ -1,7 +1,7 @@
 import { BriefService, selectedToolkits } from './briefs';
 import { TOOLKITS, toolkitBySlug } from './collectors';
 import type { ComposioGateway, ConnectedAccount } from './composio';
-import { createComposer, DEFAULT_ENERGY_PEAK, isEnergyPeak, type EnergyPeak, describeComposeError, type AiConfig, type Composer, type OnProgress } from './compose';
+import { createComposer, DEFAULT_ENERGY_PEAK, isEnergyPeak, type EnergyPeak, describeComposeError, fetchCredits, OpenRouterError, type AiConfig, type AiRoute, type Composer, type OnProgress } from './compose';
 import { MAIN_MODEL, PRESET } from './models';
 import type { Brief, Kind, Schedule, Store } from './db';
 import { redact } from './redact';
@@ -17,6 +17,8 @@ export interface OsDeps {
   createGateway(apiKey: string): ComposioGateway;
   createComposer?(config: AiConfig): Composer;
   verifyOpenRouterKey?(apiKey: string): Promise<void>;
+  /** Dollars left on the OpenRouter account. Defaults to OpenRouter's /credits. */
+  fetchCredits?(apiKey: string): Promise<number>;
   /** Told whenever schedules change, so the phone can set its reminders again. */
   onSchedulesChanged?(schedules: Schedule[]): void;
   /** Predicts this week's obstacles. Defaults to OpenRouter. */
@@ -70,9 +72,20 @@ export function createOs(deps: OsDeps) {
   const now = () => deps.now?.() ?? new Date();
   const composioKey = () => store.getSecret('composio');
   const openRouterKey = () => store.getSecret('openrouter');
+  /** The last AI call's route, kept so Settings can say which model answered and how. */
+  const lastRoute = (): (AiRoute & { at: string }) | null => {
+    try {
+      const saved = store.getSetting('ai_last_route');
+      return saved ? (JSON.parse(saved) as AiRoute & { at: string }) : null;
+    } catch {
+      return null;
+    }
+  };
   const aiConfig = (): AiConfig | null => {
     const apiKey = openRouterKey();
-    return apiKey ? { provider: 'openrouter', apiKey } : null;
+    return apiKey
+      ? { provider: 'openrouter', apiKey, onRoute: (route) => store.setSetting('ai_last_route', JSON.stringify({ ...route, at: now().toISOString() })) }
+      : null;
   };
   const gateway = () => {
     const key = composioKey();
@@ -200,8 +213,25 @@ export function createOs(deps: OsDeps) {
       return { openrouter: 'saved' as const };
     },
 
+    /**
+     * For Settings: the last AI call's route, and the credit left on the OpenRouter account, which
+     * decides whether the next call goes to the preset or the free router.
+     */
+    async aiStatus(): Promise<{ lastRoute: (AiRoute & { at: string }) | null; credit: number | null; creditError: string | null; keyRejected: boolean }> {
+      const apiKey = openRouterKey();
+      if (!apiKey) return { lastRoute: lastRoute(), credit: null, creditError: null, keyRejected: false };
+      try {
+        const credit = await (deps.fetchCredits ?? fetchCredits)(apiKey);
+        return { lastRoute: lastRoute(), credit, creditError: null, keyRejected: false };
+      } catch (error) {
+        const keyRejected = error instanceof OpenRouterError && error.status === 401;
+        return { lastRoute: lastRoute(), credit: null, creditError: describeComposeError(error), keyRejected };
+      }
+    },
+
     async removeCredential(name: 'composio' | 'openrouter') {
       store.deleteSecret(name);
+      if (name === 'openrouter') store.deleteSetting('ai_last_route');
       if (name === 'composio') forgetAccounts();
       return { ok: true };
     },
