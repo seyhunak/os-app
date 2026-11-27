@@ -249,9 +249,12 @@ How a brief is written:
 2. **Sends the brief to the preset**, with 5,000 tokens for the answer. OpenRouter tries the main model, then the backups.
 3. **One more go when OpenRouter was only busy.** A 429, 502 or 503 waits 3 seconds and asks once more. Anything else isn't retried.
 4. **You can see who wrote it.** A brief written by a backup says so under its title, such as "Written by mistralai/mistral-small-24b-instruct-2501, a backup in the os-chat preset, because qwen3-30b-a3b-instruct-2507 couldn't write it."
-5. **An unranked digest is the last resort.** You get one if the key is rejected, OpenRouter can't be reached, the preset is missing, no provider meets its rules, or the answer runs out of tokens, comes back empty or is cut off. The reason is at the top.
+5. **A free model when the preset can't.** If the preset fails for a reason another model could get past, such as no credit on the key, a missing preset, no provider that meets its rules, busy providers, a timeout, or an answer that's cut off or empty, the brief goes once to OpenRouter's free router (`model: "openrouter/free"`). It picks whatever free model is up, with `provider: {data_collection: "deny"}`, so only providers that don't keep prompts are used, and `reasoning: {exclude: true}` with 16,000 tokens, since free models often think first. A brief written this way says so under its title, such as "Written by meta-llama/llama-3.3-70b-instruct:free, a free model from OpenRouter's free router, because the os-chat preset needs credit on your OpenRouter key." A rejected key or a prompt-injection block stops at once instead, since any model would fail the same way.
+6. **An unranked digest is the last resort.** You get one if the key is rejected, OpenRouter can't be reached, or both the preset and the free router fail. The reason is at the top, with both causes when both failed.
 
-The preset's models cost money, so the key needs credit. A brief is roughly 10,000 to 20,000 tokens in and up to 5,000 out, which at the price cap is under a cent.
+The preset's models cost money, so the key needs credit. A brief is roughly 10,000 to 20,000 tokens in and up to 5,000 out, which at the price cap is under a cent. Without credit, briefs come from free models, which are slower, less steady and limited to 50 requests a day on an account that has never bought credits. Free providers that don't keep prompts aren't always available, so a free brief isn't guaranteed.
+
+The WOOP suggestions work the same way: the preset first, then one go through the free router.
 
 ## Offline
 

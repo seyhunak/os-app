@@ -102,7 +102,7 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
         onRemove={() => api.removeCredential('openrouter').then(onChanged)}
       />
       <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
-        Every brief and suggestion goes to your OpenRouter preset "{PRESET}". It tries the first model, then the backups in order, using only the cheapest providers that don't keep prompts. Change it at openrouter.ai/settings/presets.
+        Every brief and suggestion goes to your OpenRouter preset "{PRESET}". It tries the first model, then the backups in order, using only the cheapest providers that don't keep prompts. If the preset can't answer, such as when the key is out of credit, a free model is tried through OpenRouter's free router, and the brief says so. Change the preset at openrouter.ai/settings/presets.
       </Text>
       <View accessibilityRole="list" style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
         {PRESET_MODELS.map((id, i) => (
