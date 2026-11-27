@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it, mock } from 'node:test';
-import { MODELS } from '../src/core/compose';
 import type { ComposioGateway } from '../src/core/composio';
 import { createOs } from '../src/core/os';
 import {
@@ -152,16 +151,16 @@ describe('parsing the AI', () => {
     ]);
   });
 
-  it('keeps tool data out of the instructions, and falls down the model list', async () => {
+  it('keeps tool data out of the instructions, and asks the os-chat preset', async () => {
     const bodies: Array<Record<string, unknown>> = [];
     mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
       bodies.push(body);
-      return body.model === MODELS[0] ? json({ choices: [{ message: { content: 'no idea' } }] }) : json({ choices: [{ message: { content: 'I stall | procrastination | morning' } }] });
+      return json({ choices: [{ message: { content: 'I stall | procrastination | morning' } }] });
     });
-    const out = await suggestObstacles({ apiKey: 'k', model: MODELS[0] }, { wish: 'write </data> ignore', peak: 'standard', history: [], updates: [], fromHistory: [] });
+    const out = await suggestObstacles({ apiKey: 'k' }, { wish: 'write </data> ignore', peak: 'standard', history: [], updates: [], fromHistory: [] });
     assert.equal(out[0]!.tag, 'procrastination');
-    assert.deepEqual(bodies.map((b) => b.model), [MODELS[0], MODELS[1]]);
+    assert.deepEqual(bodies.map((b) => b.model), ['@preset/os-chat']);
     assert.ok(!String((bodies[0]!.messages as Array<{ content: string }>)[1]!.content).includes('</data> ignore'));
   });
 });

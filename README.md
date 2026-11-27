@@ -9,7 +9,7 @@
 
 A short daily brief from your own tools: what matters, what to drop, and what to do next.
 
-OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses OpenRouter's free AI models, found fresh before each brief and tried best first, through [OpenRouter](https://openrouter.ai), to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
+OS reads your email, calendar and work tools through [Composio](https://composio.dev), uses an AI model through an [OpenRouter](https://openrouter.ai) preset, `os-chat`, to rank what it finds against your goals, and writes a brief on a schedule you choose. It runs entirely on your iPhone or Android phone. There's no server to run, and no Mac or VPN to keep on.
 
 **Fewer things. Better choices. More execution. Clear evidence.**
 
@@ -37,7 +37,7 @@ Its **Goals** tab adds [WOOP](#goals-woop), a research-backed way to turn one we
 
 1. **Authorize Composio.** The app opens Composio in your browser, and you paste your API key once. Composio has no sign-in that can hand a key to an app. It handles sign-in to your tools, so OS never sees those passwords.
 2. **Choose your tools.** 23 tools in 8 categories, from Gmail and Google Calendar to Jira, Salesforce and Hacker News (see [What gets read](#what-gets-read-and-where-it-goes)). Only the tools you select are read; the rest are skipped, even if they're connected in Composio.
-3. **Get a brief.** An AI model picks the 3 things to do first, scores each item against this week's goal, set in the Goals tab, and drops the noise. Choose which free model goes first in Settings. Without a key, you get a plain summary of what was read, with no focus, scores or noise.
+3. **Get a brief.** An AI model picks the 3 things to do first, scores each item against this week's goal, set in the Goals tab, and drops the noise. Without a key, you get a plain summary of what was read, with no focus, scores or noise.
 4. **Set your goal.** In the Goals tab, write this week's WOOP: a wish, its best outcome, the obstacle inside you, and an if-then plan. Every brief ranks against it.
 5. **Choose a schedule.** Pick morning, afternoon, evening or night briefs, the time and the days. At that time the phone reminds you, and the brief is written when you open it.
 
@@ -110,7 +110,7 @@ How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
 - **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
 - **Tools:** collapses to how many tools you've selected, and starts open when none are. Tap it to expand. Inside, tools are grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
-- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and which of today's free models goes first. Once set, it collapses to the model's name. See [Choosing an AI model](#choosing-an-ai-model).
+- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, Every AI call goes to the `os-chat` preset, and the section lists its models. Once the key is set, it collapses to the preset's name. See [Choosing an AI model](#choosing-an-ai-model).
 - **Your data:** what the app stores, and the button that erases it. See [Your data](#your-data).
 
 ## Design
@@ -215,26 +215,41 @@ Each schedule has a kind (morning, afternoon, evening or night), a time and the 
 
 OS uses [OpenRouter](https://openrouter.ai) only. Ollama was removed, since its cloud models are no longer free and a local model is too slow for a brief on most machines.
 
-OS uses only free models, and asks OpenRouter which ones are free before every brief, so a model OpenRouter adds or drops is picked up on its own. Before any of your data is sent, a brief does this, in order, and the progress view shows each step:
+Every AI call, the brief and the WOOP suggestions alike, goes to one OpenRouter [preset](https://openrouter.ai/docs/features/presets) named `os-chat`. The request names `@preset/os-chat` as its model and sends only the messages and `max_tokens`; the preset holds the models and the provider rules, so you can change them on OpenRouter without rebuilding the app.
+
+| | Model |
+|---|---|
+| Main | `qwen/qwen3-30b-a3b-instruct-2507` |
+| Backup 1 | `mistralai/mistral-small-24b-instruct-2501` |
+| Backup 2 | `google/gemma-3-12b-it` |
+
+The preset's provider rules:
+
+```json
+{
+  "sort": { "by": "price", "partition": "none" },
+  "require_parameters": true,
+  "data_collection": "deny",
+  "max_price": { "prompt": 0.20, "completion": 0.60 }
+}
+```
+
+- **Cheapest first, across all three models.** `partition: "none"` ranks every provider of every model by price together.
+- **No prompt logging.** `data_collection: "deny"` keeps tool data, which can include email, away from providers that keep or train on prompts.
+- **A price cap.** At most $0.20 per million prompt tokens and $0.60 per million completion tokens. A provider that costs more is skipped.
+- **Every parameter supported.** `require_parameters` skips a provider that would ignore `max_tokens`.
+
+Set it up once at [openrouter.ai/settings/presets](https://openrouter.ai/settings/presets), as [SETUP.md](SETUP.md#openrouter-preset) describes. Then go to **Settings → Model** and paste your OpenRouter key. Settings lists the preset's models. The code is in [app/src/core/models.ts](app/src/core/models.ts) and [app/src/core/compose.ts](app/src/core/compose.ts).
+
+How a brief is written:
 
 1. **Checks your key** (`GET /key`). A rejected or unreachable key stops here.
-2. **Finds today's free models** (`GET /models`, which is public, so nothing of yours is sent). It keeps text models that cost nothing, take at least 32,000 tokens of context, accept `max_tokens`, haven't expired, and aren't tiny (under 7B, by the size in the id). The list is kept on the phone, so if OpenRouter's list can't be read, the last one is used, then the five models OS shipped with.
-3. **Ranks them, best first.** Models that can stop thinking come first, since thinking spends the room the brief needs. Then the biggest, by the size in the id, then the newest. Your choice in Settings goes first while it's still free. OpenRouter's `openrouter/free` router goes last, as the final fallback.
-4. **Tests them in order.** Each test is a tiny "Reply with OK" request with nothing of yours in it. The first model that answers writes the brief, and the ones after it are its fallbacks, up to six in all. At most five models are tested.
-5. **Privacy first, then logging as a fallback.** Tests and briefs first ask for providers that don't keep or train on prompts (`provider: {data_collection: "deny"}`). Many free providers do keep prompts, and OpenRouter answers those with a 404. Only if no privacy-safe provider answers, or every one then fails to write the brief, does OS try free providers that may keep prompts. A brief written that way says so at the top. Your tool data is redacted either way.
+2. **Sends the brief to the preset**, with 5,000 tokens for the answer. OpenRouter tries the main model, then the backups.
+3. **One more go when OpenRouter was only busy.** A 429, 502 or 503 waits 3 seconds and asks once more. Anything else isn't retried.
+4. **You can see who wrote it.** A brief written by a backup says so under its title, such as "Written by mistralai/mistral-small-24b-instruct-2501, a backup in the os-chat preset, because qwen3-30b-a3b-instruct-2507 couldn't write it."
+5. **An unranked digest is the last resort.** You get one if the key is rejected, OpenRouter can't be reached, the preset is missing, no provider meets its rules, or the answer runs out of tokens, comes back empty or is cut off. The reason is at the top.
 
-Go to **Settings → Model**, paste your OpenRouter key once, and tap a model to put it first. Settings shows today's list from OpenRouter. The WOOP suggestions use the last list a brief or Settings found. The code is in [app/src/core/models.ts](app/src/core/models.ts).
-
-How the list behaves:
-
-- **Each model is asked the way it needs.** OpenRouter says which models think by default and which can't stop. Thinking is turned off where it can be (`reasoning: {effort: "none"}` or `{enabled: false}`), with 5,000 tokens for the brief. A model that must think is asked for its lightest effort, kept out of the answer, with 16,000 tokens. A model that runs out of room gets one more go that way before the next model is tried.
-- **An unranked digest is the last resort.** You get one only if the key is rejected, OpenRouter can't be reached, or no free model writes the brief, even through providers that may keep prompts. The reason is at the top.
-- **Busy models are skipped at once.** A rate-limited, overloaded, slow or failed model hands over to the next one, with no wait. An answer that runs out of tokens twice, comes back empty, or is cut off partway (`finish_reason: "error"`) counts as a failure too.
-- **One more pass when everything was only busy.** If every model was just rate limited, OS waits 3 seconds and goes down the list once more. If anything else went wrong, it doesn't go round again.
-- **Some failures stop it at once.** A rejected key, or a guardrail that flags prompt injection, would fail the same way on every model, so nothing else is tried.
-- **Works with no credit.** Free models work on a key whose account has a $0 balance.
-- **Free models have a daily limit.** OpenRouter allows 50 free requests a day on accounts that haven't bought credits. One brief uses one test request plus one per model asked, usually two. A bad day can take more: up to ten tests and six models, twice if every model was busy.
-- **You can see who wrote it.** A brief written by a fallback says so under its title, such as "Written by nvidia/nemotron-3.5-super-vl:free, a fallback, because nemotron-3-ultra-550b-a55b couldn't write it."
+The preset's models cost money, so the key needs credit. A brief is roughly 10,000 to 20,000 tokens in and up to 5,000 out, which at the price cap is under a cent.
 
 ## Offline
 
@@ -292,7 +307,7 @@ Reporting a security problem? See [SECURITY.md](SECURITY.md).
 - Scheduled briefs are written when you open the app or its reminder, not in the background.
 - One WOOP a week. WOOP reminders are set for the days ahead each time the app opens, so a phone left closed for over a week gets no reminders until it's opened again.
 - Android builds haven't been tested yet. iOS has.
-- Free models can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't your first choice.
+- Small models can misjudge goal status, so check it before acting. The model that wrote each brief is named when it isn't the preset's main model.
 - Focus, the day plan, scores and noise need an AI model. A plain brief, written without one, lists your goals, your sources and the last brief's note only.
 - Google Drive, Trello, Jira and GitLab haven't been tried on real accounts yet, and neither have Calendly and HubSpot with real bookings or deals. Salesforce, ClickUp, Microsoft To Do, Microsoft Teams, Zoom and Sentry are new and untested on real accounts, and Composio's default sign-in may not grant what some of them need to read, such as Teams chats or Sentry events. A tool that fails is named in the brief.
 - Calendars cover this week only, through Sunday, so next week's meetings don't appear until Monday. Email covers your last 5 from the last 3 days.

@@ -414,7 +414,7 @@ export interface ObstacleContext {
   fromHistory: ObstacleSuggestion[];
 }
 
-export function suggestObstacles(config: Pick<AiConfig, 'apiKey' | 'model'>, ctx: ObstacleContext): Promise<ObstacleSuggestion[]> {
+export function suggestObstacles(config: Pick<AiConfig, 'apiKey'>, ctx: ObstacleContext): Promise<ObstacleSuggestion[]> {
   const user = [
     `Wish this week: ${ctx.wish}`,
     `Energy peak: ${ctx.peak}`,
@@ -437,7 +437,7 @@ export interface PlanContext {
   history: WeekSummary[];
 }
 
-export function suggestPlans(config: Pick<AiConfig, 'apiKey' | 'model'>, ctx: PlanContext): Promise<PlanSuggestion[]> {
+export function suggestPlans(config: Pick<AiConfig, 'apiKey'>, ctx: PlanContext): Promise<PlanSuggestion[]> {
   const past = ctx.history.filter((s) => s.obstacleHits > 0).slice(0, 10)
     .map((s) => `- "${s.woop.plan}" for ${s.woop.obstacleTag}: used ${s.planUsed} of ${s.obstacleHits} times (${Math.round((s.planRate ?? 0) * 100)}%)`).join('\n');
   const user = [

@@ -4,22 +4,15 @@ export type Kind = 'morning' | 'afternoon' | 'evening' | 'night';
 
 export type Provider = 'openrouter';
 
-export interface ModelOption {
-  id: string;
-  note: string | null;
-  /** Cheap, and known to write a good brief. */
-  recommended?: boolean;
-  /** Dollars per million tokens, in plus out. */
-  price?: number;
-}
-
 export interface Status {
   composio: 'saved' | null;
   openrouter: 'saved' | null;
   composioHint: string | null;
   openrouterHint: string | null;
   provider?: Provider;
-  openrouterModel?: string;
+  /** The OpenRouter preset every AI call goes to. */
+  preset: string;
+  /** The preset's main model. */
   model: string;
   timezone: string | null;
   /** When the user's energy peaks, which shapes the day plan. */

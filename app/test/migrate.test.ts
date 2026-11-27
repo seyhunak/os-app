@@ -25,7 +25,7 @@ const oldCopy = (over: Record<string, unknown> = {}) => ({
 });
 
 describe('importing the copy saved from the Mac server', () => {
-  it('brings over briefs, updates, goals, tools, model, schedules and the OpenRouter key', () => {
+  it('brings over briefs, updates, goals, tools, schedules and the OpenRouter key', () => {
     const store = memoryStore();
     const result = migrateOldCopy(store, oldCopy());
     assert.deepEqual(result, { imported: true, briefs: 3, updates: 2 });
@@ -35,7 +35,8 @@ describe('importing the copy saved from the Mac server', () => {
     assert.deepEqual(store.listLedger().map((e) => e.text), ['Called the bank', 'Shipped beta']);
     assert.equal(store.getSetting('goals'), 'Ship the beta');
     assert.equal(store.getSetting('selected_toolkits'), '["gmail","github"]');
-    assert.equal(store.getSetting('ai_model_openrouter'), 'qwen/qwen3.7-flash');
+    // The model is the os-chat preset's choice now, so the old one isn't kept.
+    assert.equal(store.getSetting('ai_model_openrouter'), null);
     assert.equal(store.listSchedules().length, 1);
     assert.equal(store.getSecret('openrouter'), 'sk-or-old-key-1234');
   });
