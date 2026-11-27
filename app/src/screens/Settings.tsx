@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Linking, Pressable, Text, View } from 'react-native';
-import { composioState, modelState } from '../settingsSummary';
+import { composioState, modelState, routerHealth, type RouterHealth, type RouterStatus } from '../settingsSummary';
 import { COMPOSIO_URL, type Api, type Status } from '../api';
 import { ToolList } from '../ToolList';
-import { PRESET, PRESET_MODELS } from '../core/models';
+import { FREE_ROUTER, PRESET_MODEL, PRESET_MODELS, PRESET_PROVIDER } from '../core/models';
 import { DEFAULT_ENERGY_PEAK, ENERGY_PEAK_LABEL, ENERGY_PEAK_PROFILE, ENERGY_PEAKS, type EnergyPeak } from '../core/compose';
 import { Button, Card, Chip, ErrorNote, Field, message, Screen, Section, Title, useColors, F } from '../ui';
 
@@ -86,9 +86,40 @@ function DataSection({ api, onErased }: { api: Api; onErased(): void }) {
   );
 }
 
-/** Your OpenRouter key. Every AI call goes to the os-chat preset, which picks the model and its backups. */
+/** A label on the left and its value on the right, in the router and status cards. */
+function InfoRow({ label, value, first, mono }: { label: string; value: string; first?: boolean; mono?: boolean }) {
+  const c = useColors();
+  return (
+    <View accessible accessibilityLabel={`${label}: ${value}`} style={{ flexDirection: 'row', gap: 12, paddingHorizontal: 12, paddingVertical: 10, borderTopWidth: first ? 0 : 1, borderColor: c.line }}>
+      <Text style={{ width: 64, color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>{label}</Text>
+      <Text style={{ flex: 1, color: c.text, fontFamily: mono ? F.mono : F.sans, fontSize: 13, lineHeight: 18 }}>{value}</Text>
+    </View>
+  );
+}
+
+/** Ok is a filled green dot, a warning a red ring, down a filled red dot, unknown a grey one. */
+function HealthDot({ level }: { level: RouterHealth['level'] }) {
+  const c = useColors();
+  const color = level === 'ok' ? c.ok : level === 'unknown' ? c.muted : c.danger;
+  return <View style={{ width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: color, backgroundColor: level === 'warn' ? 'transparent' : color }} />;
+}
+
+const short = (id: string) => id.split('/').pop()!;
+
+/**
+ * Your OpenRouter key, the router every AI call goes through, and how it's doing: where the next
+ * request goes, which model answered last, and the credit left.
+ */
 function ModelSection({ api, status, onChanged }: { api: Api; status: Status; onChanged(): void }) {
   const c = useColors();
+  const [router, setRouter] = useState<RouterStatus | null>(null);
+  const [checking, setChecking] = useState(false);
+  const check = () => {
+    setChecking(true);
+    api.aiStatus().then(setRouter, () => setRouter(null)).finally(() => setChecking(false));
+  };
+  useEffect(check, [api, status.openrouter, status.hasBriefs]);
+  const health = router && status.openrouter ? routerHealth(router) : null;
   return (
     <View style={{ gap: 10 }}>
       <KeyRow
@@ -101,23 +132,30 @@ function ModelSection({ api, status, onChanged }: { api: Api; status: Status; on
         onSave={(k) => api.saveOpenRouterKey(k).then(onChanged)}
         onRemove={() => api.removeCredential('openrouter').then(onChanged)}
       />
-      <Text style={{ color: c.muted, fontFamily: F.sans, fontSize: 13, lineHeight: 18 }}>
-        Every brief and suggestion goes to your OpenRouter preset "{PRESET}". It tries the first model, then the backups in order, using only the cheapest providers that don't keep prompts. If the preset can't answer, such as when the key is out of credit, a free model is tried through OpenRouter's free router, and the brief says so. Change the preset at openrouter.ai/settings/presets.
-      </Text>
-      <View accessibilityRole="list" style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
-        {PRESET_MODELS.map((id, i) => (
-          <View
-            key={id}
-            accessible
-            accessibilityLabel={`${id}, ${i === 0 ? 'main model' : `backup ${i}`}`}
-            style={{ minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 8, borderTopWidth: i ? 1 : 0, borderColor: c.line }}
-          >
-            <Text style={{ width: 22, color: i === 0 ? c.accent : c.muted, fontFamily: F.mono, fontSize: 13 }}>{String(i + 1).padStart(2, '0')}</Text>
-            <Text style={{ flexShrink: 1, color: i === 0 ? c.accent : c.text, fontFamily: F.sansMedium, fontSize: 15 }}>{id}</Text>
-            <Text style={{ marginLeft: 'auto', color: c.muted, fontFamily: F.sans, fontSize: 13 }}>{i === 0 ? 'Main' : 'Backup'}</Text>
-          </View>
-        ))}
+      <View style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
+        <InfoRow first label="Router" value={PRESET_MODEL} mono />
+        <InfoRow label="Models" value={PRESET_MODELS.map(short).join(' → ')} mono />
+        <InfoRow label="Rules" value={`cheapest provider · no prompt logging · max $${PRESET_PROVIDER.max_price.prompt.toFixed(2)} in / $${PRESET_PROVIDER.max_price.completion.toFixed(2)} out per M`} />
+        <InfoRow label="Fallback" value={`${FREE_ROUTER} · no prompt logging`} mono />
       </View>
+      {status.openrouter ? (
+        <View style={{ borderWidth: 1, borderColor: c.line, borderRadius: 10, backgroundColor: c.card }}>
+          <View accessible accessibilityRole="summary" accessibilityLabel={`Status: ${health?.label ?? 'checking'}`} style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10 }}>
+            <HealthDot level={health?.level ?? 'unknown'} />
+            <Text style={{ flex: 1, color: c.text, fontFamily: F.sansMedium, fontSize: 15 }}>{health?.label ?? (checking ? 'Checking…' : "Couldn't check")}</Text>
+            <Pressable accessibilityRole="button" accessibilityLabel="Check the router again" disabled={checking} onPress={check} hitSlop={12}>
+              <Text style={{ color: checking ? c.muted : c.accent, fontFamily: F.sans, fontSize: 13 }}>{checking ? 'checking' : 'check'}</Text>
+            </Pressable>
+          </View>
+          {health ? (
+            <>
+              <InfoRow label="Next" value={health.next} />
+              <InfoRow label="Last" value={health.last} />
+              <InfoRow label="Credit" value={health.credit} mono />
+            </>
+          ) : null}
+        </View>
+      ) : null}
     </View>
   );
 }

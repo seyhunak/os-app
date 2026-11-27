@@ -15,7 +15,24 @@ import { BRIEF_TOKENS, FREE_ROUTER, FREE_TOKENS, isMainModel, MAIN_MODEL, modelN
 export { modelName };
 export type Provider = 'openrouter';
 /** Every call goes to the os-chat preset, so only the key is needed. */
-export interface AiConfig { provider: 'openrouter'; apiKey: string }
+/**
+ * How one AI call was answered: by the preset's main model, one of its backups, a free model from
+ * the free router, or not at all. Settings shows the last one.
+ */
+export interface AiRoute {
+  via: 'preset' | 'backup' | 'free' | 'failed';
+  /** The model that answered, as OpenRouter named it. */
+  model: string | null;
+  task: 'brief' | 'woop';
+  /** Why it failed, in plain words, when it did. */
+  reason?: string;
+}
+export interface AiConfig {
+  provider: 'openrouter';
+  apiKey: string;
+  /** Told how each call was answered. */
+  onRoute?(route: AiRoute): void;
+}
 /** Caps what one brief can cost, since the key has a budget. */
 const MAX_OUTPUT_TOKENS = BRIEF_TOKENS;
 
@@ -338,6 +355,7 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 
 export interface ComposerOptions {
   sleep?: (ms: number) => Promise<void>;
+  onRoute?(route: AiRoute): void;
 }
 
 const withNotice = (text: string, notice: string) =>
@@ -378,12 +396,17 @@ export function createOpenRouterComposer(apiKey: string, options: ComposerOption
       const answer = await ask({}, 'wait');
       const writer = answer.model ? modelName(answer.model) : PRESET;
       progress?.({ key, text: `${capitalize(writer)} ranked your day and wrote the brief`, state: 'done' });
-      if (isMainModel(answer.model)) return answer.text;
+      const main = isMainModel(answer.model);
+      options.onRoute?.({ via: main ? 'preset' : 'backup', model: answer.model, task: 'brief' });
+      if (main) return answer.text;
       return withNotice(answer.text, `> Written by ${answer.model}, a backup in the ${PRESET} preset, because ${modelName(MAIN_MODEL)} couldn't write it.`);
     } catch (error) {
       const stop = stopsFallback(error);
       progress?.({ key, text: `The ${PRESET} preset ${whyFailed(error)}${stop ? '' : ', so trying a free model'}`, state: 'warn' });
-      if (stop) throw error;
+      if (stop) {
+        options.onRoute?.({ via: 'failed', model: null, task: 'brief', reason: describeComposeError(error) });
+        throw error;
+      }
       presetError = error;
     }
 
@@ -393,10 +416,13 @@ export function createOpenRouterComposer(apiKey: string, options: ComposerOption
       const answer = await ask({ ...FREE_REQUEST, maxTokens: FREE_TOKENS }, 'wait:free');
       const writer = answer.model ?? 'a free model';
       progress?.({ key: freeKey, text: `${capitalize(modelName(writer))}, a free model, ranked your day and wrote the brief`, state: 'done' });
+      options.onRoute?.({ via: 'free', model: answer.model, task: 'brief' });
       return withNotice(answer.text, `> Written by ${writer}, a free model from OpenRouter's free router, because the ${PRESET} preset ${whyFailed(presetError)}.`);
     } catch (error) {
       progress?.({ key: freeKey, text: `The free router ${whyFailed(error)}`, state: 'warn' });
-      throw new FallbackError(presetError, error);
+      const failure = new FallbackError(presetError, error);
+      options.onRoute?.({ via: 'failed', model: null, task: 'brief', reason: describeComposeError(failure) });
+      throw failure;
     }
   };
 }
@@ -431,13 +457,28 @@ export const createComposer = (config: AiConfig, options: ComposerOptions = {}):
     const rejected = error instanceof OpenRouterError && (error.status === 401 || error.status === 403);
     if (rejected || !(error instanceof OpenRouterError)) {
       progress?.({ key: 'check:key', text: rejected ? 'OpenRouter rejected your key' : "OpenRouter couldn't be reached", state: 'warn' });
-      throw rejected ? new OpenRouterError(401, 'key rejected') : error;
+      const failure = rejected ? new OpenRouterError(401, 'key rejected') : error;
+      config.onRoute?.({ via: 'failed', model: null, task: 'brief', reason: describeComposeError(failure) });
+      throw failure;
     }
     // OpenRouter answered but had trouble of its own, so the brief is still worth a try.
     progress?.({ key: 'check:key', text: `OpenRouter couldn't check your key (${error.status}), trying anyway`, state: 'warn' });
   }
-  return createOpenRouterComposer(config.apiKey, options)(input, progress);
+  return createOpenRouterComposer(config.apiKey, { onRoute: config.onRoute, ...options })(input, progress);
 };
+
+/** What's left on the OpenRouter account, in dollars: credits bought minus credits used. */
+export async function fetchCredits(apiKey: string): Promise<number> {
+  const response = await fetch(`${OPENROUTER_URL}/credits`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: timeoutSignal(CHECK_TIMEOUT_MS),
+  });
+  const data = (await response.json().catch(() => ({}))) as { data?: { total_credits?: number; total_usage?: number }; error?: { message?: string } };
+  if (!response.ok) throw new OpenRouterError(response.status, data.error?.message ?? `HTTP ${response.status}`);
+  const bought = Number(data.data?.total_credits ?? 0);
+  const used = Number(data.data?.total_usage ?? 0);
+  return Math.max(0, bought - used);
+}
 
 export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
   const response = await fetch(`${OPENROUTER_URL}/key`, {
@@ -514,25 +555,40 @@ const SMALL_FREE_TOKENS = 2_000;
  * through OpenRouter's free router. Used by the WOOP helpers.
  */
 export async function askSmall<T>(
-  config: Pick<AiConfig, 'apiKey'>,
+  config: Pick<AiConfig, 'apiKey' | 'onRoute'>,
   prompt: { system: string; user: string; maxTokens: number; empty: string; timeoutMs?: number },
   parse: (text: string) => T | null,
   options: ComposerOptions = {},
 ): Promise<T> {
-  const attempt = async (over: Partial<ChatRequest>): Promise<T> => {
-    const { text } = await withRetry(
+  const attempt = async (over: Partial<ChatRequest>): Promise<{ parsed: T; model: string | null }> => {
+    const { text, model } = await withRetry(
       () => chat(config.apiKey, { system: prompt.system, user: prompt.user, maxTokens: prompt.maxTokens, timeoutMs: prompt.timeoutMs ?? SMALL_TIMEOUT_MS, ...over }),
       options.sleep ?? defaultSleep,
     );
     const parsed = parse(text);
     if (parsed === null) throw new Error(prompt.empty);
-    return parsed;
+    return { parsed, model };
   };
+  const report = (route: Omit<AiRoute, 'task'>) => config.onRoute?.({ ...route, task: 'woop' });
+  let presetError: unknown;
   try {
-    return await attempt({});
+    const { parsed, model } = await attempt({});
+    report({ via: isMainModel(model) ? 'preset' : 'backup', model });
+    return parsed;
   } catch (error) {
-    if (stopsFallback(error)) throw error;
-    return attempt({ ...FREE_REQUEST, maxTokens: Math.max(prompt.maxTokens, SMALL_FREE_TOKENS) });
+    if (stopsFallback(error)) {
+      report({ via: 'failed', model: null, reason: describeComposeError(error) });
+      throw error;
+    }
+    presetError = error;
+  }
+  try {
+    const { parsed, model } = await attempt({ ...FREE_REQUEST, maxTokens: Math.max(prompt.maxTokens, SMALL_FREE_TOKENS) });
+    report({ via: 'free', model });
+    return parsed;
+  } catch (error) {
+    report({ via: 'failed', model: null, reason: describeComposeError(new FallbackError(presetError, error)) });
+    throw error;
   }
 }
 

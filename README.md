@@ -110,7 +110,7 @@ How it all works, including the scoring, is in [docs/woop.md](docs/woop.md).
 - **Energy:** when you're sharpest, which shapes the day plan. Early bird (sharpest 06:00–10:00), Standard (09:00–12:00, the default) or Night owl (16:00–22:00, slow mornings). It's saved as soon as you pick it, and collapses to its name.
 - **Tools:** collapses to how many tools you've selected, and starts open when none are. Tap it to expand. Inside, tools are grouped by category, with the categories and the tools in each listed A to Z. Each category shows how many of its tools you've selected, such as "code 2/5". Tick a tool to use it, and connect it through Composio if it isn't connected yet.
 - **Keys:** your Composio API key, kept in the phone's Keychain or Keystore. Once set, the section collapses to "Composio connected".
-- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, Every AI call goes to the `os-chat` preset, and the section lists its models. Once the key is set, it collapses to the preset's name. See [Choosing an AI model](#choosing-an-ai-model).
+- **Model:** your OpenRouter key, also kept in the Keychain or Keystore, and the router every AI call goes through: the `os-chat` preset with its models and rules, and the `openrouter/free` fallback. Under it is a short status: a health line, where the next request goes (the preset's main model while there's credit, else the free router), which model answered last and how, and the credit left, read from OpenRouter's `/credits`. Tap **check** to read it again. Once the key is set, the section collapses to the preset's name. See [Choosing an AI model](#choosing-an-ai-model).
 - **Your data:** what the app stores, and the button that erases it. See [Your data](#your-data).
 
 ## Design
