@@ -166,13 +166,70 @@ describe('the os-chat preset', () => {
     calls = 0;
     stubFetch(async () => { calls++; return json({ error: { code: 429, message: 'busy' } }, 429); });
     const busy = await createOpenRouterComposer('k', { sleep: async () => undefined })(input).catch((e) => e);
-    assert.equal(calls, 2);
-    assert.match(describeComposeError(busy), /rate limiting/);
+    // Twice to the preset, then twice to the free router.
+    assert.equal(calls, 4);
+    assert.match(describeComposeError(busy), /rate limiting.*no free model could write it either/);
     mock.restoreAll();
     calls = 0;
     stubFetch(async () => { calls++; return json({ error: { code: 401, message: 'no' } }, 401); });
     await createOpenRouterComposer('k', { sleep: async () => undefined })(input).catch(() => undefined);
     assert.equal(calls, 1);
+  });
+
+  it("falls back to OpenRouter's free router, privacy-safe, when the key is out of credit, and says so", async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    stubFetch(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      return body.model === '@preset/os-chat'
+        ? json({ error: { code: 402, message: 'This request requires more credits, or fewer max_tokens.' } }, 402)
+        : brief('<think>plan</think># Good morning\n\nBody', 'meta-llama/llama-3.3-70b-instruct:free');
+    });
+    const steps: ProgressStep[] = [];
+    const text = await createOpenRouterComposer('k')(input, (s) => steps.push(s));
+    assert.deepEqual(bodies.map((b) => b.model), ['@preset/os-chat', 'openrouter/free']);
+    like(bodies[1]!, { max_tokens: 16000, reasoning: { exclude: true }, provider: { data_collection: 'deny' } });
+    assert.equal(text, "# Good morning\n\n> Written by meta-llama/llama-3.3-70b-instruct:free, a free model from OpenRouter's free router, because the os-chat preset needs credit on your OpenRouter key.\n\nBody");
+    const texts = steps.map((s) => `${s.state}: ${s.text}`);
+    assert.ok(texts.includes('warn: The os-chat preset needs credit on your OpenRouter key, so trying a free model'), texts.join('\n'));
+    assert.ok(texts.includes('done: Llama-3.3-70b-instruct:free, a free model, ranked your day and wrote the brief'), texts.join('\n'));
+  });
+
+  it("falls back too when the preset is missing or its answer is cut off, but not for a prompt-injection block", async () => {
+    for (const presetReply of [
+      json({ error: { code: 404, message: 'Preset not found: os-chat' } }, 404),
+      json({ model: MAIN_MODEL, choices: [{ finish_reason: 'length', message: { content: 'half' } }] }),
+    ]) {
+      mock.restoreAll();
+      const models: string[] = [];
+      stubFetch(async (_url, init) => {
+        const { model } = JSON.parse(String(init?.body));
+        models.push(model);
+        return model === '@preset/os-chat' ? presetReply.clone() : brief('# Good morning\n\nBody', 'acme/free:free');
+      });
+      assert.match(await createOpenRouterComposer('k')(input), /Written by acme\/free:free, a free model/);
+      assert.deepEqual(models, ['@preset/os-chat', 'openrouter/free']);
+    }
+    mock.restoreAll();
+    let calls = 0;
+    stubFetch(async () => { calls++; return json({ error: { code: 403, message: 'Request blocked: prompt injection patterns detected' } }, 403); });
+    const blocked = await createOpenRouterComposer('k')(input).catch((e) => e);
+    assert.equal(calls, 1);
+    assert.match(describeComposeError(blocked), /flagged possible prompt injection/);
+  });
+
+  it('gives both reasons when the free router fails too', async () => {
+    stubFetch(async (_url, init) => (JSON.parse(String(init?.body)).model === '@preset/os-chat'
+      ? json({ error: { code: 402, message: 'needs credits' } }, 402)
+      : json({ error: { code: 404, message: 'No endpoints found matching your data policy' } }, 404)));
+    const error = await createOpenRouterComposer('k')(input).catch((e) => e);
+    assert.equal(describeComposeError(error), "the OpenRouter key is out of credit or over its budget, and no free model could write it either: no free provider that doesn't keep prompts was available");
+    mock.restoreAll();
+    stubFetch(async (_url, init) => (JSON.parse(String(init?.body)).model === '@preset/os-chat'
+      ? json({ error: { code: 402, message: 'needs credits' } }, 402)
+      : json({ error: { code: 429, message: 'Rate limit exceeded: free-models-per-day.' } }, 429)));
+    const limited = await createOpenRouterComposer('k', { sleep: async () => undefined })(input).catch((e) => e);
+    assert.match(describeComposeError(limited), /no free model could write it either: today's free OpenRouter requests are used up/);
   });
 
   it('stops at a rejected key without sending the brief', async () => {

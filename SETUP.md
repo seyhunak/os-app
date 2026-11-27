@@ -86,7 +86,7 @@ Every AI call goes to an OpenRouter preset named `os-chat`, so it has to exist i
    ```
 
    In the form, that's **Include Provider Preferences** ticked, **sort** set to price, **How to route between models** left on **Fallback** (OpenRouter saves this as `partition: null`), **data_collection** set to deny, **max_price** 0.20 and 0.60, and **Require parameters** set to Yes. Don't choose **Sort** for routing: it would send most requests to the cheapest model, Gemma, instead of Qwen.
-4. Save it, and add some credit to the account. These models aren't free.
+4. Save it, and add some credit to the account. These models aren't free. Without credit, OS falls back to a free model through OpenRouter's free router when one that doesn't keep prompts is up, and says so at the top of the brief.
 
 Leave the system prompt empty: OS sends its own.
 
@@ -134,7 +134,8 @@ Then build onto your phone again, as in step 2. Your data stays on the phone acr
 |---|---|
 | "Composio didn't accept that key" | Copy the key again from Composio's Settings → Project Settings → API Keys |
 | A tool shows as failed in the brief | Reconnect it in Settings → Tools, or at [composio.dev](https://composio.dev). OS waits an hour before trying a failed tool again, unless you tap Refetch |
-| A plain brief instead of an AI one | The brief says why: no OpenRouter key, the key is out of credit, the `os-chat` preset is missing, or OpenRouter was busy |
+| A plain brief instead of an AI one | The brief says why: no OpenRouter key, or both the `os-chat` preset and the free fallback failed, such as no credit and no privacy-safe free provider, or today's free requests used up |
+| "Written by …, a free model from OpenRouter's free router" | The preset couldn't answer, and the line says why. Usually the key needs credit |
 | "OpenRouter has no preset named os-chat" | Create it as in [OpenRouter preset](#openrouter-preset), in the same account as the key |
 | No reminder at a scheduled time | Allow notifications for OS in the phone's Settings. The brief is still written the next time you open the app |
 | A scheduled brief didn't appear | Schedules write the brief when you open the reminder or the app, not in the background |

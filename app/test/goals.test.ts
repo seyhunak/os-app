@@ -57,6 +57,18 @@ describe('askSmall', () => {
     assert.equal(bodies[0]!.max_tokens, 300);
   });
 
+  it('asks a free model through the free router when the preset is out of credit', async () => {
+    const bodies: Array<Record<string, unknown>> = [];
+    mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      bodies.push(body);
+      return body.model === '@preset/os-chat' ? json({ error: { code: 402, message: 'needs credits' } }, 402) : json({ choices: [{ message: { content: 'free ok' } }] });
+    });
+    const out = await askSmall({ apiKey: 'k' }, { system: 's', user: 'u', maxTokens: 250, empty: 'nothing' }, (t) => t || null);
+    assert.equal(out, 'free ok');
+    assert.deepEqual(bodies.map((b) => [b.model, b.max_tokens, b.provider]), [['@preset/os-chat', 250, undefined], ['openrouter/free', 2000, { data_collection: 'deny' }]]);
+  });
+
   it('gives up with the empty message when the answer has nothing usable', async () => {
     mock.method(globalThis, 'fetch', async () => json({ choices: [{ message: { content: '' } }] }));
     await assert.rejects(askSmall({ apiKey: 'k' }, { system: 's', user: 'u', maxTokens: 300, empty: 'nothing' }, (t) => t || null), /nothing/);

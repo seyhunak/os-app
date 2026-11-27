@@ -10,7 +10,7 @@ export function timeoutSignal(ms: number): AbortSignal {
 }
 
 export const SOURCES_MARKER = '{{SOURCES}}';
-import { BRIEF_TOKENS, isMainModel, MAIN_MODEL, modelName, OPENROUTER_URL, PRESET, PRESET_MODEL } from './models';
+import { BRIEF_TOKENS, FREE_ROUTER, FREE_TOKENS, isMainModel, MAIN_MODEL, modelName, OPENROUTER_URL, PRESET, PRESET_MODEL } from './models';
 
 export { modelName };
 export type Provider = 'openrouter';
@@ -255,6 +255,25 @@ const isRetryable = (error: unknown) => error instanceof OpenRouterError && (err
 export const isMissingPreset = (error: unknown) => error instanceof OpenRouterError && (error.status === 400 || error.status === 404) && /preset/i.test(error.message);
 /** No provider of the preset's models meets its rules: no prompt logging, the price cap, every parameter supported. */
 export const isPolicyError = (error: unknown) => error instanceof OpenRouterError && error.status === 404 && /data policy|no endpoints|max.?price|parameters/i.test(error.message);
+/** These fail the same way on any model, so the free fallback would only spend time. */
+export const stopsFallback = (error: unknown) =>
+  error instanceof OpenRouterError && (error.status === 401 || (error.status === 403 && /injection/i.test(error.message)));
+/** Free models share a daily request limit, which is low on a key with little credit. */
+export const isDailyLimit = (error: unknown) => error instanceof OpenRouterError && error.status === 429 && /per[- ]day/i.test(error.message);
+
+/** The preset couldn't answer, and neither could a free model. Carries both reasons. */
+export class FallbackError extends Error {
+  constructor(readonly preset: unknown, readonly free: unknown) {
+    super(free instanceof Error ? free.message : 'the free fallback failed');
+  }
+}
+
+/**
+ * What a free-router request adds: the router picks a free model, thinking is kept out of the
+ * answer, and only providers that don't keep prompts are allowed, since tool data can include email.
+ */
+const FREE_REQUEST = { model: FREE_ROUTER, reasoning: { exclude: true }, provider: { data_collection: 'deny' } } as const;
+
 /** Waits before the one retry, when OpenRouter or every provider was only busy. */
 export const RETRY_DELAYS_MS = [3_000];
 const BRIEF_TIMEOUT_MS = 90_000;
@@ -264,11 +283,16 @@ export interface ChatRequest {
   user: string;
   maxTokens: number;
   timeoutMs: number;
+  /** Another model than the preset, such as the free router. */
+  model?: string;
+  reasoning?: Record<string, unknown>;
+  provider?: Record<string, unknown>;
 }
 
 /**
- * One chat call to the os-chat preset. The preset picks the model, falls back to its backups and
- * applies its provider rules, so the request names no model or provider of its own.
+ * One chat call, to the os-chat preset unless `request.model` names another. The preset picks the
+ * model, falls back to its backups and applies its provider rules, so a preset request names no
+ * model or provider of its own.
  */
 export async function chat(apiKey: string, request: ChatRequest): Promise<{ text: string; model: string | null; finish: string | null }> {
   const response = await fetch(`${OPENROUTER_URL}/chat/completions`, {
@@ -276,8 +300,10 @@ export async function chat(apiKey: string, request: ChatRequest): Promise<{ text
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'X-Title': 'OS' },
     signal: timeoutSignal(request.timeoutMs),
     body: JSON.stringify({
-      model: PRESET_MODEL,
+      model: request.model ?? PRESET_MODEL,
       max_tokens: request.maxTokens,
+      ...(request.reasoning ? { reasoning: request.reasoning } : {}),
+      ...(request.provider ? { provider: request.provider } : {}),
       messages: [
         { role: 'system', content: request.system },
         { role: 'user', content: request.user },
@@ -314,47 +340,72 @@ export interface ComposerOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** Has the os-chat preset write the brief. A brief written by a backup model says which one. */
+const withNotice = (text: string, notice: string) =>
+  (/^# .*\n/.test(text) ? text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${text}`);
+
+/**
+ * Has the os-chat preset write the brief. A brief written by a backup model says which one. If the
+ * preset can't write it, such as when the key is out of credit, a free model gets one go through
+ * OpenRouter's free router, and the brief says so.
+ */
 export function createOpenRouterComposer(apiKey: string, options: ComposerOptions = {}): Composer {
   const sleep = options.sleep ?? defaultSleep;
   return async (input, progress) => {
+    const ask = (over: Partial<ChatRequest>, waitKey: string) => withRetry(async () => {
+      const { text, model, finish } = await chat(apiKey, {
+        system: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}`,
+        user: renderUserPrompt(input),
+        maxTokens: MAX_OUTPUT_TOKENS,
+        timeoutMs: BRIEF_TIMEOUT_MS,
+        ...over,
+      });
+      if (finish === 'content_filter') throw new Error('the AI model declined this brief');
+      if (finish === 'length') throw new Error('the AI model ran out of output tokens');
+      // The provider failed partway, so whatever came back is a partial brief.
+      if (finish === 'error') throw new Error('the AI model stopped partway through');
+      if (!text) throw new Error('the AI model returned an empty brief');
+      return { text, model };
+    }, sleep, (pass, state) => progress?.({
+      key: `${waitKey}:${pass}`,
+      text: state === 'running' ? 'OpenRouter was busy. Waiting a few seconds, then trying again' : 'Waited for OpenRouter, trying again',
+      state,
+    }));
+
     const key = 'model:brief';
     progress?.({ key, text: `Asking the ${PRESET} preset to weigh everything against your goals`, state: 'running' });
+    let presetError: unknown;
     try {
-      const answer = await withRetry(async () => {
-        const { text, model, finish } = await chat(apiKey, {
-          system: `${SHARED_RULES}\n\n${STRUCTURE[input.kind]}`,
-          user: renderUserPrompt(input),
-          maxTokens: MAX_OUTPUT_TOKENS,
-          timeoutMs: BRIEF_TIMEOUT_MS,
-        });
-        if (finish === 'content_filter') throw new Error('the AI model declined this brief');
-        if (finish === 'length') throw new Error('the AI model ran out of output tokens');
-        // The provider failed partway, so whatever came back is a partial brief.
-        if (finish === 'error') throw new Error('the AI model stopped partway through');
-        if (!text) throw new Error('the AI model returned an empty brief');
-        return { text, model };
-      }, sleep, (pass, state) => progress?.({
-        key: `wait:${pass}`,
-        text: state === 'running' ? 'OpenRouter was busy. Waiting a few seconds, then trying again' : 'Waited for OpenRouter, trying again',
-        state,
-      }));
+      const answer = await ask({}, 'wait');
       const writer = answer.model ? modelName(answer.model) : PRESET;
       progress?.({ key, text: `${capitalize(writer)} ranked your day and wrote the brief`, state: 'done' });
       if (isMainModel(answer.model)) return answer.text;
-      const notice = `> Written by ${answer.model}, a backup in the ${PRESET} preset, because ${modelName(MAIN_MODEL)} couldn't write it.`;
-      return /^# .*\n/.test(answer.text) ? answer.text.replace(/^(# .*\n)/, `$1\n${notice}\n`) : `${notice}\n\n${answer.text}`;
+      return withNotice(answer.text, `> Written by ${answer.model}, a backup in the ${PRESET} preset, because ${modelName(MAIN_MODEL)} couldn't write it.`);
     } catch (error) {
-      progress?.({ key, text: `The ${PRESET} preset ${whyFailed(error)}`, state: 'warn' });
-      throw error;
+      const stop = stopsFallback(error);
+      progress?.({ key, text: `The ${PRESET} preset ${whyFailed(error)}${stop ? '' : ', so trying a free model'}`, state: 'warn' });
+      if (stop) throw error;
+      presetError = error;
+    }
+
+    const freeKey = 'model:free';
+    progress?.({ key: freeKey, text: "Asking a free model through OpenRouter's free router", state: 'running' });
+    try {
+      const answer = await ask({ ...FREE_REQUEST, maxTokens: FREE_TOKENS }, 'wait:free');
+      const writer = answer.model ?? 'a free model';
+      progress?.({ key: freeKey, text: `${capitalize(modelName(writer))}, a free model, ranked your day and wrote the brief`, state: 'done' });
+      return withNotice(answer.text, `> Written by ${writer}, a free model from OpenRouter's free router, because the ${PRESET} preset ${whyFailed(presetError)}.`);
+    } catch (error) {
+      progress?.({ key: freeKey, text: `The free router ${whyFailed(error)}`, state: 'warn' });
+      throw new FallbackError(presetError, error);
     }
   };
 }
 
 const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
-/** A few words on why the preset didn't write the brief, for the progress view. */
+/** A few words on why the preset, or the free router, didn't write the brief, for the progress view and the notice. */
 function whyFailed(error: unknown): string {
+  if (isDailyLimit(error)) return "hit today's limit on free OpenRouter requests";
   if (isMissingPreset(error)) return "isn't set up in your OpenRouter account";
   if (isPolicyError(error)) return 'has no provider that meets its privacy and price rules';
   if (error instanceof OpenRouterError) {
@@ -397,6 +448,11 @@ export async function verifyOpenRouterKey(apiKey: string): Promise<void> {
 }
 
 export function describeComposeError(error: unknown): string {
+  if (error instanceof FallbackError) {
+    const free = isPolicyError(error.free) ? "no free provider that doesn't keep prompts was available" : describeComposeError(error.free);
+    return `${describeComposeError(error.preset)}, and no free model could write it either: ${free}`;
+  }
+  if (isDailyLimit(error)) return "today's free OpenRouter requests are used up. They come back at midnight UTC";
   if (isMissingPreset(error)) return `OpenRouter has no preset named "${PRESET}" for this key. Create it at openrouter.ai/settings/presets, as SETUP.md describes`;
   if (error instanceof OpenRouterError) {
     if (error.status === 401) return 'the OpenRouter API key was rejected';
@@ -449,9 +505,13 @@ export function renderSources(sources: SourceReport[]): string {
 
 const SMALL_TIMEOUT_MS = 45_000;
 
+/** Room a free model gets for a short answer, since it may think first. */
+const SMALL_FREE_TOKENS = 2_000;
+
 /**
  * One short request to the os-chat preset, retried once if OpenRouter was busy. `parse` returns
- * null when the answer has nothing usable. Used by the WOOP helpers.
+ * null when the answer has nothing usable. If the preset can't answer, a free model gets one go
+ * through OpenRouter's free router. Used by the WOOP helpers.
  */
 export async function askSmall<T>(
   config: Pick<AiConfig, 'apiKey'>,
@@ -459,13 +519,21 @@ export async function askSmall<T>(
   parse: (text: string) => T | null,
   options: ComposerOptions = {},
 ): Promise<T> {
-  const { text } = await withRetry(
-    () => chat(config.apiKey, { system: prompt.system, user: prompt.user, maxTokens: prompt.maxTokens, timeoutMs: prompt.timeoutMs ?? SMALL_TIMEOUT_MS }),
-    options.sleep ?? defaultSleep,
-  );
-  const parsed = parse(text);
-  if (parsed === null) throw new Error(prompt.empty);
-  return parsed;
+  const attempt = async (over: Partial<ChatRequest>): Promise<T> => {
+    const { text } = await withRetry(
+      () => chat(config.apiKey, { system: prompt.system, user: prompt.user, maxTokens: prompt.maxTokens, timeoutMs: prompt.timeoutMs ?? SMALL_TIMEOUT_MS, ...over }),
+      options.sleep ?? defaultSleep,
+    );
+    const parsed = parse(text);
+    if (parsed === null) throw new Error(prompt.empty);
+    return parsed;
+  };
+  try {
+    return await attempt({});
+  } catch (error) {
+    if (stopsFallback(error)) throw error;
+    return attempt({ ...FREE_REQUEST, maxTokens: Math.max(prompt.maxTokens, SMALL_FREE_TOKENS) });
+  }
 }
 
 /** Text placed inside a data tag in a prompt, so it can't close the tag. */

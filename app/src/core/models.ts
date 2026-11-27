@@ -34,6 +34,14 @@ export const PRESET_PROVIDER = {
   max_price: { prompt: 0.2, completion: 0.6 },
 } as const;
 
+/**
+ * OpenRouter's router to whatever free model is up. Tried once, only when the preset can't answer,
+ * such as when the key is out of credit. Only providers that don't keep prompts are allowed.
+ */
+export const FREE_ROUTER = 'openrouter/free';
+/** Free models often think before answering, so they get room for that too. Free, so the room costs nothing. */
+export const FREE_TOKENS = 16_000;
+
 /** Room for the brief. None of the preset's models think, so all of it goes to the answer. */
 export const BRIEF_TOKENS = 5_000;
 
