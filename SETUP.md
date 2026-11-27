@@ -77,13 +77,15 @@ Every AI call goes to an OpenRouter preset named `os-chat`, so it has to exist i
 
    ```json
    {
-     "sort": { "by": "price", "partition": "none" },
+     "sort": { "by": "price", "partition": "model" },
+     "allow_fallbacks": true,
      "require_parameters": true,
      "data_collection": "deny",
      "max_price": { "prompt": 0.20, "completion": 0.60 }
    }
    ```
 
+   In the form, that's **Include Provider Preferences** ticked, **sort** set to price, **How to route between models** left on **Fallback** (OpenRouter saves this as `partition: null`), **data_collection** set to deny, **max_price** 0.20 and 0.60, and **Require parameters** set to Yes. Don't choose **Sort** for routing: it would send most requests to the cheapest model, Gemma, instead of Qwen.
 4. Save it, and add some credit to the account. These models aren't free.
 
 Leave the system prompt empty: OS sends its own.
