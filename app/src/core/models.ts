@@ -19,13 +19,16 @@ export const PRESET_MODELS = [MAIN_MODEL, ...BACKUP_MODELS] as const;
 /**
  * The preset's provider rules, as set in OpenRouter. Kept here so Settings, the docs and the tests
  * say the same thing. The request doesn't send them: the preset does.
- * - Cheapest provider first, across all models.
+ * - Fallback between models: the main model first, then the backups in order. OpenRouter saves
+ *   this as `partition: null`, its default, which is the same as "model".
+ * - Within each model, the cheapest provider first.
  * - Only providers that support every parameter sent.
  * - Only providers that don't keep or train on prompts, since tool data can include email.
  * - At most $0.20 per million prompt tokens and $0.60 per million completion tokens.
  */
 export const PRESET_PROVIDER = {
-  sort: { by: 'price', partition: 'none' },
+  sort: { by: 'price', partition: 'model' },
+  allow_fallbacks: true,
   require_parameters: true,
   data_collection: 'deny',
   max_price: { prompt: 0.2, completion: 0.6 },

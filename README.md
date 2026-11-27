@@ -227,14 +227,16 @@ The preset's provider rules:
 
 ```json
 {
-  "sort": { "by": "price", "partition": "none" },
+  "sort": { "by": "price", "partition": "model" },
+  "allow_fallbacks": true,
   "require_parameters": true,
   "data_collection": "deny",
   "max_price": { "prompt": 0.20, "completion": 0.60 }
 }
 ```
 
-- **Cheapest first, across all three models.** `partition: "none"` ranks every provider of every model by price together.
+- **The main model first, then the backups.** `partition: "model"` (OpenRouter's default, saved as `null` and shown as **Fallback** under "How to route between models") always tries Qwen first, and moves to the next model only when no provider of it can answer. `partition: "none"` would rank every provider of every model by price together, so the cheapest model, Gemma, would usually answer instead.
+- **The cheapest provider of each model.** `sort.by: "price"` orders each model's providers by price.
 - **No prompt logging.** `data_collection: "deny"` keeps tool data, which can include email, away from providers that keep or train on prompts.
 - **A price cap.** At most $0.20 per million prompt tokens and $0.60 per million completion tokens. A provider that costs more is skipped.
 - **Every parameter supported.** `require_parameters` skips a provider that would ignore `max_tokens`.

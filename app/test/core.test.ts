@@ -129,7 +129,7 @@ describe('the os-chat preset', () => {
   it('mirrors the preset set up in OpenRouter', () => {
     assert.equal(PRESET_MODEL, '@preset/os-chat');
     assert.deepEqual([...PRESET_MODELS], ['qwen/qwen3-30b-a3b-instruct-2507', 'mistralai/mistral-small-24b-instruct-2501', 'google/gemma-3-12b-it']);
-    assert.deepEqual(PRESET_PROVIDER, { sort: { by: 'price', partition: 'none' }, require_parameters: true, data_collection: 'deny', max_price: { prompt: 0.2, completion: 0.6 } });
+    assert.deepEqual(PRESET_PROVIDER, { sort: { by: 'price', partition: 'model' }, allow_fallbacks: true, require_parameters: true, data_collection: 'deny', max_price: { prompt: 0.2, completion: 0.6 } });
   });
 
   it('checks the key, then sends the brief to the preset, with no model, provider or reasoning of its own', async () => {
